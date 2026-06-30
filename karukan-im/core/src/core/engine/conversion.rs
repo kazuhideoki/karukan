@@ -560,8 +560,16 @@ impl InputMethodEngine {
                 // Ctrl+N / Ctrl+P: emacs-style candidate navigation
                 if key.modifiers.control_key {
                     match key.keysym {
-                        Keysym::KEY_N | Keysym::KEY_N_UPPER => return self.next_candidate(),
-                        Keysym::KEY_P | Keysym::KEY_P_UPPER => return self.prev_candidate(),
+                        Keysym::KEY_N | Keysym::KEY_N_UPPER
+                            if !key.modifiers.alt_key && !key.modifiers.super_key =>
+                        {
+                            return self.next_candidate();
+                        }
+                        Keysym::KEY_P | Keysym::KEY_P_UPPER
+                            if !key.modifiers.alt_key && !key.modifiers.super_key =>
+                        {
+                            return self.prev_candidate();
+                        }
                         // Ctrl+R / Ctrl+T: cycle the source filter. Both
                         // keysym cases — some environments fold Shift into
                         // an uppercase keysym; direction must not change.
