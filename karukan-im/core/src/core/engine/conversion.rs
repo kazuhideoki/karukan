@@ -137,6 +137,19 @@ impl InputMethodEngine {
         self.enter_conversion_state(&reading, candidate_list)
     }
 
+    /// Enter conversion from composing auto-suggest and move the candidate cursor.
+    pub(super) fn start_conversion_and_move_candidate(&mut self, forward: bool) -> EngineResult {
+        let result = self.start_conversion(LearningLookup::Use);
+        if !matches!(self.state, InputState::Conversion { .. }) {
+            return result;
+        }
+        if forward {
+            self.next_candidate()
+        } else {
+            self.prev_candidate()
+        }
+    }
+
     /// Map builder output to the public [`CandidateList`] shown in the
     /// conversion window, settled at the configured width.
     fn to_conversion_candidate_list(

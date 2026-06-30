@@ -112,6 +112,18 @@ final class KeyCodeMapTests: XCTestCase {
         XCTAssertEqual(previous?.modifiers.control, true)
     }
 
+    func testControlNPFallsBackToKeyCode() {
+        let next = KeyCodeMap.translate(
+            keyCode: 45, characters: nil, charactersIgnoringModifiers: nil, flags: [.control])
+        XCTAssertEqual(next?.keysym, 0x6e)
+        XCTAssertEqual(next?.modifiers.control, true)
+
+        let previous = KeyCodeMap.translate(
+            keyCode: 35, characters: nil, charactersIgnoringModifiers: nil, flags: [.control])
+        XCTAssertEqual(previous?.keysym, 0x70)
+        XCTAssertEqual(previous?.modifiers.control, true)
+    }
+
     func testNonAsciiNotTranslated() {
         // Kana input layouts produce non-ASCII characters; unsupported.
         XCTAssertNil(

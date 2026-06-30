@@ -44,6 +44,15 @@ enum KeyCodeMap {
         101: 0xffc6, 109: 0xffc7, 103: 0xffc8, 111: 0xffc9,
     ]
 
+    // macOS text handling can turn Ctrl+letter into control/private-use
+    // characters, or omit `charactersIgnoringModifiers` in some clients.
+    // Recover the plain XKB keysym from the physical key code for IME
+    // shortcuts that must be handled before the client sees the event.
+    private static let controlLetterKeys: [UInt16: UInt32] = [
+        35: 0x70,  // P
+        45: 0x6e,  // N
+    ]
+
     /// JIS keyboard かな key (kVK_JIS_Kana).
     static let kanaKeyCode: UInt16 = 104
     /// JIS keyboard 英数 key (kVK_JIS_Eisu).
@@ -71,6 +80,12 @@ enum KeyCodeMap {
         let modifiers = modifiers(from: flags)
 
         if let keysym = specialKeys[keyCode] {
+            return EngineKeyEvent(keysym: keysym, modifiers: modifiers)
+        }
+
+        if modifiers.control && !modifiers.alt && !modifiers.superKey,
+            let keysym = controlLetterKeys[keyCode]
+        {
             return EngineKeyEvent(keysym: keysym, modifiers: modifiers)
         }
 

@@ -238,6 +238,13 @@ impl InputMethodEngine {
                 Keysym::KEY_E | Keysym::KEY_E_UPPER => return self.move_caret_end(),
                 // Ctrl+F: move right (Emacs-style Right)
                 Keysym::KEY_F | Keysym::KEY_F_UPPER => return self.move_caret_right(),
+                // Ctrl+N / Ctrl+P: enter conversion and move the candidate cursor.
+                Keysym::KEY_N | Keysym::KEY_N_UPPER => {
+                    return self.start_conversion_and_move_candidate(true);
+                }
+                Keysym::KEY_P | Keysym::KEY_P_UPPER => {
+                    return self.start_conversion_and_move_candidate(false);
+                }
                 // Ctrl+R / Ctrl+T: start the conversion already narrowed
                 // (first source / the cycle's tail), straight from typing —
                 // no Space needed to reach the filtered view.

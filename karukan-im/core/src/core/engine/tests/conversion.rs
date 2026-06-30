@@ -22,6 +22,36 @@ fn test_conversion_ctrl_n_p_moves_conversion_cursor() {
 }
 
 #[test]
+fn test_composing_ctrl_n_enters_conversion_and_moves_cursor() {
+    let mut engine = InputMethodEngine::new();
+
+    engine.process_key(&press('a'));
+    assert!(matches!(engine.state(), InputState::Composing { .. }));
+
+    let result = engine.process_key(&press_ctrl(Keysym::KEY_N));
+    assert!(result.consumed);
+
+    let candidates = engine.state().candidates().unwrap();
+    assert!(candidates.len() >= 2);
+    assert_eq!(candidates.cursor(), 1);
+}
+
+#[test]
+fn test_composing_ctrl_p_enters_conversion_and_moves_cursor_to_previous() {
+    let mut engine = InputMethodEngine::new();
+
+    engine.process_key(&press('a'));
+    assert!(matches!(engine.state(), InputState::Composing { .. }));
+
+    let result = engine.process_key(&press_ctrl(Keysym::KEY_P));
+    assert!(result.consumed);
+
+    let candidates = engine.state().candidates().unwrap();
+    assert!(candidates.len() >= 2);
+    assert_eq!(candidates.cursor(), candidates.len() - 1);
+}
+
+#[test]
 fn test_conversion_char_refines_reading() {
     let mut engine = InputMethodEngine::new();
 
