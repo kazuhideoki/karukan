@@ -584,8 +584,8 @@ impl InputMethodEngine {
             Keysym::PAGE_UP => self.prev_candidate_page(),
             Keysym::BACKSPACE => self.backspace_conversion(),
             _ => {
-                // Ctrl+N / Ctrl+P: emacs-style candidate navigation
-                if key.modifiers.control_key && !key.modifiers.alt_key {
+                // Ctrl+N / Ctrl+P: emacs-style conversion cursor movement.
+                if key.modifiers.control_key && !key.modifiers.alt_key && !key.modifiers.super_key {
                     match key.keysym {
                         Keysym::KEY_N | Keysym::KEY_N_UPPER => return self.next_candidate(),
                         Keysym::KEY_P | Keysym::KEY_P_UPPER => return self.prev_candidate(),

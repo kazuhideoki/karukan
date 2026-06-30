@@ -45,6 +45,27 @@ fn test_conversion_char_commits_and_continues_romaji() {
 }
 
 #[test]
+fn test_conversion_ctrl_n_p_moves_conversion_cursor() {
+    let mut engine = InputMethodEngine::new();
+
+    engine.process_key(&press('a'));
+    engine.process_key(&press_key(Keysym::SPACE));
+    assert!(matches!(engine.state(), InputState::Conversion { .. }));
+
+    let candidates = engine.state().candidates().unwrap();
+    assert!(candidates.len() >= 2);
+    assert_eq!(candidates.cursor(), 0);
+
+    let result = engine.process_key(&press_ctrl(Keysym::KEY_N));
+    assert!(result.consumed);
+    assert_eq!(engine.state().candidates().unwrap().cursor(), 1);
+
+    let result = engine.process_key(&press_ctrl(Keysym::KEY_P));
+    assert!(result.consumed);
+    assert_eq!(engine.state().candidates().unwrap().cursor(), 0);
+}
+
+#[test]
 fn test_alphabet_mode_space_inserts_literal_space() {
     let mut engine = InputMethodEngine::new();
 
