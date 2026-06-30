@@ -249,6 +249,19 @@ impl InputMethodEngine {
         self.enter_conversion_state(&reading, candidate_list)
     }
 
+    /// Enter conversion from composing auto-suggest and move the candidate cursor.
+    pub(super) fn start_conversion_and_move_candidate(&mut self, forward: bool) -> EngineResult {
+        let result = self.start_conversion(false);
+        if !matches!(self.state, InputState::Conversion { .. }) {
+            return result;
+        }
+        if forward {
+            self.next_candidate()
+        } else {
+            self.prev_candidate()
+        }
+    }
+
     /// Transition to Conversion state with the given reading and candidate list.
     ///
     /// Sets up the preedit (highlighted selected text), updates the state, and
