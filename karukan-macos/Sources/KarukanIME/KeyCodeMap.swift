@@ -93,6 +93,15 @@ enum KeyCodeMap {
         else {
             return nil
         }
+
+        // macOS text fields treat Ctrl+H as delete backward. Normalize it
+        // before it reaches the engine so it behaves like Backspace while
+        // composing text.
+        if modifiers.control && !modifiers.alt && !modifiers.superKey
+            && (keysym == 0x68 || keysym == 0x48)
+        {
+            return EngineKeyEvent(keysym: 0xff08, modifiers: KeyModifiers(shift: modifiers.shift))
+        }
         return EngineKeyEvent(keysym: keysym, modifiers: modifiers)
     }
 

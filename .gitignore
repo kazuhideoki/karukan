@@ -44,3 +44,5 @@ data/
 # macOS IME (karukan-macos)
 karukan-macos/.build/
 karukan-macos/out/
+/.build/
+/out/

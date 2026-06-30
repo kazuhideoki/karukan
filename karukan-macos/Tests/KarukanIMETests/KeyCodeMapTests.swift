@@ -38,6 +38,14 @@ final class KeyCodeMapTests: XCTestCase {
         XCTAssertEqual(event?.modifiers.control, true)
     }
 
+    func testControlHMapsToBackspace() {
+        let event = KeyCodeMap.translate(
+            keyCode: 4, characters: "\u{08}", charactersIgnoringModifiers: "h",
+            flags: [.control])
+        XCTAssertEqual(event?.keysym, 0xff08)
+        XCTAssertEqual(event?.modifiers.control, false)
+    }
+
     func testOptionGlyphFallsBackToIgnoringModifiers() {
         // Option+a: `characters` is "å"; fall back to the plain key.
         let event = KeyCodeMap.translate(
