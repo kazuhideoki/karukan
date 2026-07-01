@@ -59,6 +59,23 @@ fn test_engine_backspace() {
 }
 
 #[test]
+fn backspace_after_consonant_sequence_keeps_remaining_consonant_as_romaji() {
+    let mut engine = InputMethodEngine::new();
+
+    engine.process_key(&press('s'));
+    assert_eq!(engine.preedit().unwrap().text(), "s");
+
+    engine.process_key(&press('t'));
+    assert_eq!(engine.preedit().unwrap().text(), "st");
+
+    engine.process_key(&press_key(Keysym::BACKSPACE));
+    assert_eq!(engine.preedit().unwrap().text(), "s");
+
+    engine.process_key(&press('a'));
+    assert_eq!(engine.preedit().unwrap().text(), "さ");
+}
+
+#[test]
 fn space_in_empty_passes_through_by_default() {
     // The default space is the ASCII one, which the application inserts
     // itself — leaving Space to do whatever it does there (scrolling a
