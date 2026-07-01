@@ -64,6 +64,14 @@ impl InputBuffer {
         self.remove_char_at(self.cursor_pos)
     }
 
+    /// Get the character immediately before the cursor.
+    pub fn char_before_cursor(&self) -> Option<char> {
+        if self.cursor_pos == 0 {
+            return None;
+        }
+        self.text.chars().nth(self.cursor_pos - 1)
+    }
+
     /// Remove the character at the cursor position (delete key).
     pub fn remove_char_at_cursor(&mut self) -> Option<char> {
         self.remove_char_at(self.cursor_pos)

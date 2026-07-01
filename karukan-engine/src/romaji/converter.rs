@@ -228,6 +228,50 @@ impl RomajiConverter {
         }
     }
 
+    /// Move trailing output back into the romaji buffer after deleting the buffer.
+    ///
+    /// This is used by higher-level editors after deleting the buffered character
+    /// from an invalid consonant sequence. For example, typing `st` passes `s`
+    /// through and buffers `t`; deleting `t` should make the remaining `s`
+    /// eligible to combine with the next vowel.
+    ///
+    /// It also handles the double-consonant rule: typing `kk` outputs `っ` and
+    /// buffers `k`; deleting the buffered `k` should restore a pending `k`.
+    pub fn rebuffer_last_output_after_buffer_delete(
+        &mut self,
+        deleted_buffer_char: char,
+        expected_output_char: char,
+    ) -> bool {
+        if !self.buffer.is_empty() {
+            return false;
+        }
+
+        let deleted_buffer_char = deleted_buffer_char.to_ascii_lowercase();
+        if !deleted_buffer_char.is_ascii_alphabetic()
+            || !self.trie.children.contains_key(&deleted_buffer_char)
+        {
+            return false;
+        }
+
+        if expected_output_char == 'っ' && self.output.chars().next_back() == Some('っ') {
+            self.output.pop();
+            self.buffer.push(deleted_buffer_char);
+            return true;
+        }
+
+        let expected_output_char = expected_output_char.to_ascii_lowercase();
+        if !expected_output_char.is_ascii_alphabetic()
+            || !self.trie.children.contains_key(&expected_output_char)
+            || self.output.chars().next_back() != Some(expected_output_char)
+        {
+            return false;
+        }
+
+        self.output.pop();
+        self.buffer.push(expected_output_char);
+        true
+    }
+
     /// Get the current output
     pub fn output(&self) -> &str {
         &self.output
