@@ -143,6 +143,11 @@ pub struct InputMethodEngine {
     input_buf: InputBuffer,
     /// Live conversion state
     live: LiveConversion,
+    /// Candidate list currently shown by the composing auto-suggest window.
+    /// Kept so `Ctrl+1..9` can commit exactly the candidate the user sees,
+    /// without re-running conversion (which may reorder the list). Set on
+    /// every auto-suggest refresh; `None` when no composing candidates show.
+    composing_candidates: Option<CandidateList>,
     /// Internal chunking of the composing buffer used by
     /// `chunked_auto_suggest`: a cache of the per-chunk model conversions.
     /// Re-chunking diffs the new buffer against this by common prefix/suffix so
@@ -173,6 +178,7 @@ impl InputMethodEngine {
             pre_emoji_mode: None,
             input_buf: InputBuffer::new(),
             live: LiveConversion::default(),
+            composing_candidates: None,
             chunks: Vec::new(),
             dicts: Dictionaries::default(),
             learning: None,
@@ -247,6 +253,7 @@ impl InputMethodEngine {
         self.input_buf.clear();
         self.live.text.clear();
         self.chunks.clear();
+        self.composing_candidates = None;
         self.metrics = ConversionMetrics::default();
     }
 
@@ -274,6 +281,7 @@ impl InputMethodEngine {
             // against a buffer it no longer matches).
             self.live.text.clear();
             self.chunks.clear();
+            self.composing_candidates = None;
             // Emoji mode is per-session and bound to the typed `:` —
             // if the user erased back to an empty buffer, the session
             // is over. Restore whatever mode the user was in before

@@ -56,16 +56,17 @@ impl InputMethodEngine {
             append_candidates_dedup(&mut all_candidates, self.lookup_dict_candidates(&reading));
             append_candidates_dedup(&mut all_candidates, self.lookup_rewriter_variants(&reading));
             if all_candidates.is_empty() {
+                self.composing_candidates = None;
                 return EngineResult::consumed()
                     .with_action(EngineAction::UpdatePreedit(preedit))
                     .with_action(EngineAction::HideCandidates)
                     .with_action(EngineAction::UpdateAuxText(self.format_aux_composing()));
             }
+            let candidate_list = CandidateList::new(all_candidates);
+            self.composing_candidates = Some(candidate_list.clone());
             return EngineResult::consumed()
                 .with_action(EngineAction::UpdatePreedit(preedit))
-                .with_action(EngineAction::ShowCandidates(CandidateList::new(
-                    all_candidates,
-                )))
+                .with_action(EngineAction::ShowCandidates(candidate_list))
                 .with_action(EngineAction::UpdateAuxText(self.format_aux_composing()));
         };
 
@@ -87,11 +88,11 @@ impl InputMethodEngine {
             append_candidates_dedup(&mut all_candidates, model_candidates);
             append_candidates_dedup(&mut all_candidates, self.lookup_dict_candidates(&reading));
             let aux = self.format_aux_suggest(&self.input_buf.text.clone());
+            let candidate_list = CandidateList::new(all_candidates);
+            self.composing_candidates = Some(candidate_list.clone());
             return EngineResult::consumed()
                 .with_action(EngineAction::UpdatePreedit(preedit))
-                .with_action(EngineAction::ShowCandidates(CandidateList::new(
-                    all_candidates,
-                )))
+                .with_action(EngineAction::ShowCandidates(candidate_list))
                 .with_action(EngineAction::UpdateAuxText(aux));
         }
 
@@ -109,11 +110,11 @@ impl InputMethodEngine {
         // Then dictionary candidates
         append_candidates_dedup(&mut all_candidates, self.lookup_dict_candidates(&reading));
         let aux = self.format_aux_suggest(&self.input_buf.text.clone());
+        let candidate_list = CandidateList::new(all_candidates);
+        self.composing_candidates = Some(candidate_list.clone());
         EngineResult::consumed()
             .with_action(EngineAction::UpdatePreedit(preedit))
-            .with_action(EngineAction::ShowCandidates(CandidateList::new(
-                all_candidates,
-            )))
+            .with_action(EngineAction::ShowCandidates(candidate_list))
             .with_action(EngineAction::UpdateAuxText(aux))
     }
 
@@ -277,6 +278,17 @@ impl InputMethodEngine {
                 }
                 _ => {}
             }
+            // Ctrl+1..9: commit the shown auto-suggest candidate at that
+            // position directly. Selecting from the displayed list (not a
+            // re-conversion) guarantees the committed text matches what the
+            // user sees. Requires alt/super to be clear to avoid clobbering
+            // platform shortcuts.
+            if !key.modifiers.alt_key
+                && !key.modifiers.super_key
+                && let Some(digit) = key.keysym.digit_value()
+            {
+                return self.select_composing_candidate_by_digit(digit);
+            }
         }
 
         match key.keysym {
@@ -426,6 +438,7 @@ impl InputMethodEngine {
             self.input_buf.clear();
             self.live.text.clear();
             self.chunks.clear();
+            self.composing_candidates = None;
             return EngineResult::consumed()
                 .with_action(EngineAction::HideCandidates)
                 .with_action(EngineAction::HideAuxText);
@@ -443,6 +456,7 @@ impl InputMethodEngine {
         self.input_buf.clear();
         self.live.text.clear();
         self.chunks.clear();
+        self.composing_candidates = None;
         self.state = InputState::Empty;
         self.exit_emoji_mode();
 
@@ -457,6 +471,52 @@ impl InputMethodEngine {
             .with_action(EngineAction::HideAuxText)
     }
 
+    /// Commit the auto-suggest candidate at 1-based page position `digit`
+    /// (`Ctrl+1..9`). Selects from the list currently shown by the composing
+    /// candidate window, so the committed text always matches what the user
+    /// sees rather than a fresh re-conversion. Returns `not_consumed` when no
+    /// candidate window is open; swallows the key when the position is empty.
+    pub(super) fn select_composing_candidate_by_digit(&mut self, digit: usize) -> EngineResult {
+        let (text, reading) = {
+            let Some(candidates) = self.composing_candidates.as_mut() else {
+                return EngineResult::not_consumed();
+            };
+            if candidates.select_on_page(digit).is_none() {
+                return EngineResult::consumed();
+            }
+            let text = candidates.selected_text().unwrap_or("").to_string();
+            let reading = candidates.selected().and_then(|c| c.reading.clone());
+            (text, reading)
+        };
+
+        if text.is_empty() {
+            return EngineResult::consumed();
+        }
+
+        // Record learning, mirroring commit_composing. Skip in emoji mode: the
+        // buffer holds a `:query`, not a hiragana reading, so storing it would
+        // corrupt the kana-keyed learning cache.
+        if self.input_mode != InputMode::Emoji
+            && let Some(reading) = &reading
+        {
+            self.record_learning(reading, &text);
+        }
+
+        self.converters.romaji.reset();
+        self.input_buf.clear();
+        self.live.text.clear();
+        self.chunks.clear();
+        self.composing_candidates = None;
+        self.state = InputState::Empty;
+        self.exit_emoji_mode();
+
+        EngineResult::consumed()
+            .with_action(EngineAction::UpdatePreedit(Preedit::new()))
+            .with_action(EngineAction::Commit(text))
+            .with_action(EngineAction::HideCandidates)
+            .with_action(EngineAction::HideAuxText)
+    }
+
     /// Cancel the current input
     /// In live conversion mode: first Escape clears live conversion and shows hiragana,
     /// second Escape cancels input entirely.
@@ -464,6 +524,7 @@ impl InputMethodEngine {
         // If live conversion is active, first Escape returns to hiragana display
         if !self.live.text.is_empty() {
             self.live.text.clear();
+            self.composing_candidates = None;
             let preedit = self.set_composing_state();
             return EngineResult::consumed()
                 .with_action(EngineAction::UpdatePreedit(preedit))
@@ -488,6 +549,7 @@ impl InputMethodEngine {
         self.input_buf.clear();
         self.live.text.clear();
         self.chunks.clear();
+        self.composing_candidates = None;
         self.state = InputState::Empty;
         // Emoji mode is per-session: leaving it returns the user to
         // whatever mode they were in before typing `:` so their next

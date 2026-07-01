@@ -109,3 +109,36 @@ fn space_key_keeps_learning_in_composing() {
         texts,
     );
 }
+
+#[test]
+fn ctrl_digit_in_composing_records_learning() {
+    // Committing an auto-suggest candidate via Ctrl+digit must record learning,
+    // matching the Enter (commit_composing) and Conversion-digit paths.
+    let mut engine = InputMethodEngine::new();
+    engine.converters.kanji = None;
+    engine.learning = Some(LearningCache::new(100));
+    engine.input_buf.insert("でぃ");
+    engine.state = InputState::Composing {
+        preedit: Preedit::with_text_underlined("でぃ"),
+        romaji_buffer: String::new(),
+    };
+    engine.composing_candidates = Some(CandidateList::new(vec![
+        Candidate::with_reading("ディ", "でぃ"),
+        Candidate::with_reading("ディレクトリ", "でぃ"),
+    ]));
+
+    let result = engine.process_key(&press_ctrl(Keysym::KEY_2));
+    assert!(result.consumed);
+
+    // The committed surface is now learned for that reading.
+    let texts: Vec<String> = engine
+        .build_conversion_candidates("でぃ", 9, false)
+        .into_iter()
+        .map(|c| c.text)
+        .collect();
+    assert!(
+        texts.contains(&"ディレクトリ".to_string()),
+        "Ctrl+digit commit should record learning, got {:?}",
+        texts,
+    );
+}

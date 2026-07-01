@@ -10,6 +10,9 @@ impl InputMethodEngine {
             self.converters.romaji.reset();
         }
         self.live.text.clear();
+        // Cursor movement hides the auto-suggest window (below); drop the
+        // stored list so a following Ctrl+1..9 can't commit a stale candidate.
+        self.composing_candidates = None;
         self.input_buf.cursor_pos = new_pos;
         self.log_chunk_state("cursor");
         let preedit = self.set_composing_state();

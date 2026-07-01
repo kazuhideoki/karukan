@@ -16,6 +16,9 @@ impl InputMethodEngine {
         self.input_mode = InputMode::Katakana;
         // Clear live conversion text so katakana mode takes priority on commit
         self.live.text.clear();
+        // The shown auto-suggest candidates were built for hiragana input; drop
+        // them so a following Ctrl+1..9 doesn't commit a now-irrelevant entry.
+        self.composing_candidates = None;
 
         let romaji_buffer = self.converters.romaji.buffer().to_string();
 
@@ -55,6 +58,7 @@ impl InputMethodEngine {
             }
             if !self.live.text.is_empty() {
                 self.live.text.clear();
+                self.composing_candidates = None;
                 let preedit = self.set_composing_state();
                 return EngineResult::consumed()
                     .with_action(EngineAction::UpdatePreedit(preedit))

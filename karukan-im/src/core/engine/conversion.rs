@@ -191,6 +191,10 @@ impl InputMethodEngine {
         // in the conversion candidate list even if the re-inference uses a different strategy.
         let prev_suggest_text = std::mem::take(&mut self.live.text);
 
+        // Leaving the composing auto-suggest window: the Conversion state owns
+        // its own candidate list from here on.
+        self.composing_candidates = None;
+
         self.converters.romaji.reset();
         self.input_buf.cursor_pos = 0;
 
