@@ -243,6 +243,55 @@ fn test_ctrl_digit_with_no_suggestion_is_consumed() {
 }
 
 #[test]
+fn test_composing_right_commits_top_auto_suggest_candidate() {
+    let mut engine = InputMethodEngine::new();
+    engine.input_buf.insert("うまく");
+    engine.state = InputState::Composing {
+        preedit: Preedit::with_text_underlined("うまく"),
+    };
+    engine.shown_suggestions = CandidateList::new(vec![
+        Candidate::with_reading("うまくいく", "うまく"),
+        Candidate::with_reading("上手く", "うまく"),
+    ]);
+
+    let result = engine.process_key(&press_key(Keysym::RIGHT));
+    assert_eq!(committed(&result).as_deref(), Some("うまくいく"));
+    assert!(matches!(engine.state(), InputState::Empty));
+}
+
+#[test]
+fn test_composing_ctrl_f_commits_top_auto_suggest_candidate() {
+    let mut engine = InputMethodEngine::new();
+    engine.input_buf.insert("うまく");
+    engine.state = InputState::Composing {
+        preedit: Preedit::with_text_underlined("うまく"),
+    };
+    engine.shown_suggestions = CandidateList::new(vec![
+        Candidate::with_reading("うまくいく", "うまく"),
+        Candidate::with_reading("上手く", "うまく"),
+    ]);
+
+    let result = engine.process_key(&press_ctrl(Keysym::KEY_F));
+    assert_eq!(committed(&result).as_deref(), Some("うまくいく"));
+    assert!(matches!(engine.state(), InputState::Empty));
+}
+
+#[test]
+fn test_composing_right_without_candidates_moves_caret() {
+    let mut engine = InputMethodEngine::new();
+    engine.input_buf.insert("あい");
+    engine.input_buf.set_cursor(1);
+    engine.state = InputState::Composing {
+        preedit: Preedit::with_text_underlined("あい"),
+    };
+
+    let result = engine.process_key(&press_key(Keysym::RIGHT));
+    assert!(result.consumed);
+    assert_eq!(engine.preedit().unwrap().text(), "あい");
+    assert_eq!(engine.preedit().unwrap().caret(), 2);
+}
+
+#[test]
 fn test_emoji_digit_selection_does_not_pollute_learning() {
     // Committing an emoji by number must not record `:query` → 😀 into the
     // kana-keyed learning cache, and must leave emoji mode.
