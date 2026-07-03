@@ -267,8 +267,17 @@ impl InputMethodEngine {
                 Keysym::KEY_B | Keysym::KEY_B_UPPER => return self.move_caret_left(),
                 // Ctrl+E: move to end (Emacs-style End)
                 Keysym::KEY_E | Keysym::KEY_E_UPPER => return self.move_caret_end(),
-                // Ctrl+F: move right (Emacs-style Right)
-                Keysym::KEY_F | Keysym::KEY_F_UPPER => return self.move_caret_right(),
+                // Ctrl+F: accept the top auto-suggest candidate if shown;
+                // otherwise keep the Emacs-style right movement.
+                Keysym::KEY_F | Keysym::KEY_F_UPPER => {
+                    if !key.modifiers.alt_key && !key.modifiers.super_key {
+                        let result = self.select_composing_candidate_by_digit(1);
+                        if result.consumed {
+                            return result;
+                        }
+                    }
+                    return self.move_caret_right();
+                }
                 // Ctrl+N / Ctrl+P: enter conversion and move the candidate cursor.
                 Keysym::KEY_N | Keysym::KEY_N_UPPER => {
                     return self.start_conversion_and_move_candidate(true);
@@ -303,7 +312,16 @@ impl InputMethodEngine {
             Keysym::TAB => self.start_conversion(true),
             Keysym::SPACE | Keysym::DOWN => self.start_conversion(false),
             Keysym::LEFT => self.move_caret_left(),
-            Keysym::RIGHT => self.move_caret_right(),
+            Keysym::RIGHT => {
+                if !key.modifiers.control_key && !key.modifiers.alt_key && !key.modifiers.super_key
+                {
+                    let result = self.select_composing_candidate_by_digit(1);
+                    if result.consumed {
+                        return result;
+                    }
+                }
+                self.move_caret_right()
+            }
             Keysym::HOME => self.move_caret_home(),
             Keysym::END => self.move_caret_end(),
             _ => {
