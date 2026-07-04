@@ -254,12 +254,49 @@ fn test_cursor_left_flushes_romaji_buffer() {
     engine.process_key(&press('k'));
     assert_eq!(engine.preedit().unwrap().text(), "あk");
 
-    // Move left - should flush "k" (becomes "k" as-is or gets handled)
+    // Move left from display caret 2 to display caret 1.
     engine.process_key(&press_key(Keysym::LEFT));
-    // After flush, buffer should be empty, the flushed char is in composed text
     let preedit = engine.preedit().unwrap();
-    // "k" flushed becomes "k" (pass-through since no match)
-    assert!(preedit.text().contains('k') || preedit.text().contains("あ"));
+    assert_eq!(preedit.text(), "あk");
+    assert_eq!(preedit.caret(), 1);
+}
+
+#[test]
+fn test_cursor_left_from_romaji_sequence_keeps_middle_consonant_convertible() {
+    let mut engine = InputMethodEngine::new();
+
+    engine.process_key(&press('s'));
+    engine.process_key(&press('t'));
+    assert_eq!(engine.preedit().unwrap().text(), "st");
+    assert_eq!(engine.preedit().unwrap().caret(), 2);
+
+    engine.process_key(&press_key(Keysym::LEFT));
+    assert_eq!(engine.preedit().unwrap().text(), "st");
+    assert_eq!(engine.preedit().unwrap().caret(), 1);
+
+    engine.process_key(&press('a'));
+    assert_eq!(engine.preedit().unwrap().text(), "さt");
+    assert_eq!(engine.preedit().unwrap().caret(), 1);
+}
+
+#[test]
+fn test_delete_after_romaji_buffer_deletes_after_display_caret() {
+    let mut engine = InputMethodEngine::new();
+
+    engine.process_key(&press('a'));
+    engine.process_key(&press('u'));
+    engine.process_key(&press_key(Keysym::LEFT));
+    engine.process_key(&press('k'));
+    assert_eq!(engine.preedit().unwrap().text(), "あkう");
+    assert_eq!(engine.preedit().unwrap().caret(), 2);
+
+    engine.process_key(&press_key(Keysym::DELETE));
+    assert_eq!(engine.preedit().unwrap().text(), "あk");
+    assert_eq!(engine.preedit().unwrap().caret(), 2);
+
+    engine.process_key(&press('a'));
+    assert_eq!(engine.preedit().unwrap().text(), "あか");
+    assert_eq!(engine.preedit().unwrap().caret(), 2);
 }
 
 #[test]

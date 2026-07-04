@@ -272,6 +272,11 @@ impl RomajiConverter {
         true
     }
 
+    /// True if `ch` can start a romaji conversion sequence.
+    pub fn can_start_conversion(&self, ch: char) -> bool {
+        self.trie.children.contains_key(&ch.to_ascii_lowercase())
+    }
+
     /// Get the current output
     pub fn output(&self) -> &str {
         &self.output

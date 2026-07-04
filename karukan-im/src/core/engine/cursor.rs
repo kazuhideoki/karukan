@@ -3,11 +3,21 @@
 use super::*;
 
 impl InputMethodEngine {
-    /// Common helper for cursor movement: flush romaji, clear live conversion, set new position
-    fn move_caret(&mut self, new_pos: usize) -> EngineResult {
+    fn flush_romaji_preserving_display_caret(&mut self) {
+        if self.converters.romaji.buffer().is_empty() {
+            return;
+        }
+        let display_caret = self.display_caret_position();
+        self.flush_romaji_to_composed();
+        self.converters.romaji.reset();
+        let total = self.input_buf.text.chars().count();
+        self.input_buf.cursor_pos = display_caret.min(total);
+    }
+
+    /// Common helper for cursor movement: flush romaji, clear live conversion, set new display position
+    fn move_caret_to_display_pos(&mut self, new_pos: usize) -> EngineResult {
         if !self.converters.romaji.buffer().is_empty() {
-            self.flush_romaji_to_composed();
-            self.converters.romaji.reset();
+            self.flush_romaji_preserving_display_caret();
         }
         self.live.text.clear();
         // Cursor movement hides the auto-suggest window (below); drop the
@@ -64,22 +74,21 @@ impl InputMethodEngine {
 
     /// Move caret left within hiragana input
     pub(super) fn move_caret_left(&mut self) -> EngineResult {
-        let new_pos = self.input_buf.cursor_pos.saturating_sub(1);
-        self.move_caret(new_pos)
+        let new_pos = self.display_caret_position().saturating_sub(1);
+        self.move_caret_to_display_pos(new_pos)
     }
 
     /// Move caret right within hiragana input
     pub(super) fn move_caret_right(&mut self) -> EngineResult {
-        let total = self.input_buf.text.chars().count();
-        let new_pos = (self.input_buf.cursor_pos + 1).min(total);
-        self.move_caret(new_pos)
+        let total = self.build_input_display().chars().count();
+        let new_pos = (self.display_caret_position() + 1).min(total);
+        self.move_caret_to_display_pos(new_pos)
     }
 
     /// Handle delete key in hiragana mode
     pub(super) fn delete_composing(&mut self) -> EngineResult {
-        // If romaji buffer is not empty, don't delete from composed (buffer is at cursor)
         if !self.converters.romaji.buffer().is_empty() {
-            return EngineResult::consumed();
+            self.flush_romaji_preserving_display_caret();
         }
 
         // Delete character at cursor position
@@ -96,12 +105,12 @@ impl InputMethodEngine {
 
     /// Move caret to start of input
     pub(super) fn move_caret_home(&mut self) -> EngineResult {
-        self.move_caret(0)
+        self.move_caret_to_display_pos(0)
     }
 
     /// Move caret to end of input
     pub(super) fn move_caret_end(&mut self) -> EngineResult {
-        let total = self.input_buf.text.chars().count();
-        self.move_caret(total)
+        let total = self.build_input_display().chars().count();
+        self.move_caret_to_display_pos(total)
     }
 }

@@ -12,6 +12,26 @@ fn append_candidates_dedup(target: &mut Vec<Candidate>, source: Vec<Candidate>) 
 }
 
 impl InputMethodEngine {
+    fn should_rebuffer_previous_char_for(&self, ch: char) -> bool {
+        matches!(ch.to_ascii_lowercase(), 'a' | 'i' | 'u' | 'e' | 'o')
+            && self.input_buf.char_before_cursor().is_some_and(|prev| {
+                prev.is_ascii_alphabetic() && self.converters.romaji.can_start_conversion(prev)
+            })
+    }
+
+    fn rebuffer_previous_char_if_needed(&mut self, ch: char) {
+        if !self.converters.romaji.buffer().is_empty()
+            || !self.should_rebuffer_previous_char_for(ch)
+        {
+            return;
+        }
+
+        if let Some(prev) = self.input_buf.remove_char_before_cursor() {
+            self.converters.romaji.reset();
+            self.converters.romaji.push(prev);
+        }
+    }
+
     /// Refresh the input state: rebuild preedit and run auto-suggest for candidates.
     pub(super) fn refresh_input_state(&mut self) -> EngineResult {
         // Alphabet mode with active live conversion but no kana left to convert:
@@ -397,6 +417,7 @@ impl InputMethodEngine {
             return self.refresh_input_state();
         }
 
+        self.rebuffer_previous_char_if_needed(ch);
         let prev_output_len = self.converters.romaji.output().chars().count();
         let _event = self.converters.romaji.push(ch);
         let curr_output_len = self.converters.romaji.output().chars().count();
