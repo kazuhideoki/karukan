@@ -67,6 +67,56 @@ impl CandidateBuilder {
 }
 
 impl InputMethodEngine {
+    fn annotated_candidate_to_public(ac: AnnotatedCandidate, default_reading: &str) -> Candidate {
+        let cand_reading = ac.reading.unwrap_or_else(|| default_reading.to_string());
+        let label = ac.source.label();
+        Candidate {
+            text: ac.text,
+            reading: Some(cand_reading),
+            source_label: (!label.is_empty()).then(|| label.to_string()),
+            description: ac.description,
+        }
+    }
+
+    /// Keep the order the user already saw while composing, then append any
+    /// richer conversion-only candidates behind it.
+    fn merge_displayed_candidates_for_conversion(
+        &self,
+        displayed: CandidateList,
+        generated: Vec<AnnotatedCandidate>,
+        reading: &str,
+    ) -> Vec<Candidate> {
+        let mut generated: Vec<Option<AnnotatedCandidate>> =
+            generated.into_iter().map(Some).collect();
+        let mut seen = HashSet::new();
+        let mut out = Vec::new();
+
+        for shown in displayed.candidates() {
+            if !seen.insert(shown.text.clone()) {
+                continue;
+            }
+
+            let generated_match = generated
+                .iter()
+                .position(|candidate| candidate.as_ref().is_some_and(|ac| ac.text == shown.text))
+                .and_then(|idx| generated[idx].take());
+
+            if let Some(ac) = generated_match {
+                out.push(Self::annotated_candidate_to_public(ac, reading));
+            } else {
+                out.push(shown.clone());
+            }
+        }
+
+        for ac in generated.into_iter().flatten() {
+            if seen.insert(ac.text.clone()) {
+                out.push(Self::annotated_candidate_to_public(ac, reading));
+            }
+        }
+
+        out
+    }
+
     /// Run kana-kanji conversion for a reading via llama.cpp model.
     ///
     /// Determines the conversion strategy (main model, light model, or parallel beam),
@@ -193,7 +243,7 @@ impl InputMethodEngine {
 
         // Leaving the composing auto-suggest window: the Conversion state owns
         // its own candidate list from here on.
-        self.composing_candidates = None;
+        let displayed_candidates = self.composing_candidates.take().filter(|_| !skip_learning);
 
         self.converters.romaji.reset();
         self.input_buf.cursor_pos = 0;
@@ -235,21 +285,14 @@ impl InputMethodEngine {
         //   - `source_label` ← source.label() only (e.g. `🤖 AI`, `📚 辞書`)
         //   - `description`  ← the per-candidate description only
         //                      (e.g. `三点リーダ`, `[全]英大文字`)
-        let candidate_list = CandidateList::new(
+        let candidate_list = CandidateList::new(if let Some(displayed) = displayed_candidates {
+            self.merge_displayed_candidates_for_conversion(displayed, candidates, &reading)
+        } else {
             candidates
                 .into_iter()
-                .map(|ac| {
-                    let cand_reading = ac.reading.unwrap_or_else(|| reading.clone());
-                    let label = ac.source.label();
-                    Candidate {
-                        text: ac.text,
-                        reading: Some(cand_reading),
-                        source_label: (!label.is_empty()).then(|| label.to_string()),
-                        description: ac.description,
-                    }
-                })
-                .collect(),
-        );
+                .map(|ac| Self::annotated_candidate_to_public(ac, &reading))
+                .collect()
+        });
         self.enter_conversion_state(&reading, candidate_list)
     }
 
