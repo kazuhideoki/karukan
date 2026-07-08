@@ -97,3 +97,102 @@ fn test_empty_live_text_not_added_to_candidates() {
         );
     }
 }
+
+#[test]
+fn test_space_preserves_displayed_composing_candidate_order() {
+    let mut engine = InputMethodEngine::new();
+    engine.input_buf.insert("こん");
+    engine.state = InputState::Composing {
+        preedit: Preedit::with_text_underlined("こん"),
+    };
+    engine.shown_suggestions = CandidateList::new(vec![
+        Candidate::with_reading("こん", "こん"),
+        Candidate::with_reading("コン", "こん"),
+        Candidate::with_reading("今回の", "こん"),
+        Candidate::with_reading("KON", "こん"),
+    ]);
+
+    let result = engine.process_key(&press_key(Keysym::SPACE));
+    assert!(result.consumed);
+    assert!(matches!(engine.state(), InputState::Conversion { .. }));
+
+    let texts: Vec<String> = engine
+        .state()
+        .candidates()
+        .unwrap()
+        .candidates()
+        .iter()
+        .map(|c| c.text.clone())
+        .collect();
+    assert_eq!(
+        &texts[..4],
+        ["こん", "コン", "今回の", "KON"],
+        "Space must keep the composing candidate order at the top, got {:?}",
+        texts
+    );
+}
+
+#[test]
+fn test_down_preserves_displayed_composing_candidate_order() {
+    let mut engine = InputMethodEngine::new();
+    engine.input_buf.insert("こん");
+    engine.state = InputState::Composing {
+        preedit: Preedit::with_text_underlined("こん"),
+    };
+    engine.shown_suggestions = CandidateList::new(vec![
+        Candidate::with_reading("こん", "こん"),
+        Candidate::with_reading("コン", "こん"),
+        Candidate::with_reading("今回の", "こん"),
+    ]);
+
+    let result = engine.process_key(&press_key(Keysym::DOWN));
+    assert!(result.consumed);
+    assert!(matches!(engine.state(), InputState::Conversion { .. }));
+
+    let texts: Vec<String> = engine
+        .state()
+        .candidates()
+        .unwrap()
+        .candidates()
+        .iter()
+        .map(|c| c.text.clone())
+        .collect();
+    assert_eq!(
+        &texts[..3],
+        ["こん", "コン", "今回の"],
+        "Down must keep the composing candidate order at the top, got {:?}",
+        texts
+    );
+}
+
+#[test]
+fn test_tab_does_not_preserve_displayed_composing_candidates() {
+    let mut engine = InputMethodEngine::new();
+    engine.input_buf.insert("あい");
+    engine.state = InputState::Composing {
+        preedit: Preedit::with_text_underlined("あい"),
+    };
+    engine.shown_suggestions = CandidateList::new(vec![Candidate::with_reading(
+        "表示中だけの候補",
+        "あい",
+    )]);
+
+    let result = engine.process_key(&press_key(Keysym::TAB));
+    assert!(result.consumed);
+    assert!(matches!(engine.state(), InputState::Conversion { .. }));
+    assert!(engine.shown_suggestions.is_empty());
+
+    let texts: Vec<String> = engine
+        .state()
+        .candidates()
+        .unwrap()
+        .candidates()
+        .iter()
+        .map(|c| c.text.clone())
+        .collect();
+    assert!(
+        !texts.contains(&"表示中だけの候補".to_string()),
+        "Tab should keep using the regenerated learning-skipping conversion list, got {:?}",
+        texts
+    );
+}

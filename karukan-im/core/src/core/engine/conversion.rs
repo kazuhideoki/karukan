@@ -87,6 +87,45 @@ impl CandidateBuilder {
 }
 
 impl InputMethodEngine {
+    /// Keep the order the user already saw while composing, then append any
+    /// richer conversion-only candidates behind it.
+    fn merge_displayed_candidates_for_conversion(
+        &self,
+        displayed: CandidateList,
+        generated: Vec<AnnotatedCandidate>,
+        reading: &str,
+    ) -> Vec<Candidate> {
+        let mut generated: Vec<Option<AnnotatedCandidate>> =
+            generated.into_iter().map(Some).collect();
+        let mut seen = HashSet::new();
+        let mut out = Vec::new();
+
+        for shown in displayed.candidates() {
+            if !seen.insert(shown.text.clone()) {
+                continue;
+            }
+
+            let generated_match = generated
+                .iter()
+                .position(|candidate| candidate.as_ref().is_some_and(|ac| ac.text == shown.text))
+                .and_then(|idx| generated[idx].take());
+
+            if let Some(ac) = generated_match {
+                out.push(ac.into_candidate(reading));
+            } else {
+                out.push(shown.clone());
+            }
+        }
+
+        for ac in generated.into_iter().flatten() {
+            if seen.insert(ac.text.clone()) {
+                out.push(ac.into_candidate(reading));
+            }
+        }
+
+        out
+    }
+
     /// Start kanji conversion for the current buffer (Space/Down/Tab).
     pub(super) fn start_conversion(&mut self, learning: LearningLookup) -> EngineResult {
         // Resolve the reading without touching the composition, so Esc
@@ -101,6 +140,14 @@ impl InputMethodEngine {
         // displayed candidate survives even if re-inference diverges.
         let prev_suggest_text = self.live_text_with_pending();
         self.live.shown = false;
+        let displayed_candidates = if learning == LearningLookup::Use
+            && !self.shown_suggestions.is_empty()
+        {
+            Some(std::mem::take(&mut self.shown_suggestions))
+        } else {
+            self.shown_suggestions = CandidateList::default();
+            None
+        };
 
         if reading.is_empty() {
             return EngineResult::consumed();
@@ -133,7 +180,16 @@ impl InputMethodEngine {
             return EngineResult::consumed().with_action(EngineAction::UpdatePreedit(preedit));
         }
 
-        let candidate_list = self.to_conversion_candidate_list(candidates, &reading);
+        let candidate_list = if let Some(displayed) = displayed_candidates {
+            let merged = self.merge_displayed_candidates_for_conversion(
+                displayed,
+                candidates,
+                &reading,
+            );
+            self.settle_candidates(merged)
+        } else {
+            self.to_conversion_candidate_list(candidates, &reading)
+        };
         self.enter_conversion_state(&reading, candidate_list)
     }
 
