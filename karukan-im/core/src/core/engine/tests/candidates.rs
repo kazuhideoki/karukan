@@ -172,10 +172,8 @@ fn test_tab_does_not_preserve_displayed_composing_candidates() {
     engine.state = InputState::Composing {
         preedit: Preedit::with_text_underlined("あい"),
     };
-    engine.shown_suggestions = CandidateList::new(vec![Candidate::with_reading(
-        "表示中だけの候補",
-        "あい",
-    )]);
+    engine.shown_suggestions =
+        CandidateList::new(vec![Candidate::with_reading("表示中だけの候補", "あい")]);
 
     let result = engine.process_key(&press_key(Keysym::TAB));
     assert!(result.consumed);

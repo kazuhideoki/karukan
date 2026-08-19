@@ -292,6 +292,20 @@ fn test_composing_right_without_candidates_moves_caret() {
 }
 
 #[test]
+fn test_cursor_move_clears_stored_suggestions() {
+    let mut engine = InputMethodEngine::new();
+    engine.input_buf.insert("あい");
+    engine.input_buf.set_cursor(2);
+    engine.state = InputState::Composing {
+        preedit: Preedit::with_text_underlined("あい"),
+    };
+    engine.shown_suggestions = CandidateList::new(vec![Candidate::with_reading("愛", "あい")]);
+
+    engine.process_key(&press_ctrl(Keysym::KEY_B));
+    assert!(engine.shown_suggestions.is_empty());
+}
+
+#[test]
 fn test_emoji_digit_selection_does_not_pollute_learning() {
     // Committing an emoji by number must not record `:query` → 😀 into the
     // kana-keyed learning cache, and must leave emoji mode.

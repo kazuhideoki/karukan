@@ -45,5 +45,8 @@ data/
 # macOS IME (karukan-macos)
 karukan-im/macos/.build/
 karukan-im/macos/out/
+# Legacy paths retained so pre-restructure build artifacts stay ignored.
+karukan-macos/.build/
+karukan-macos/out/
 /.build/
 /out/

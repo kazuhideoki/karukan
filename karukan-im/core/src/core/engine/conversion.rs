@@ -94,11 +94,30 @@ impl InputMethodEngine {
         displayed: CandidateList,
         generated: Vec<AnnotatedCandidate>,
         reading: &str,
+        current_suggest_text: &str,
     ) -> Vec<Candidate> {
         let mut generated: Vec<Option<AnnotatedCandidate>> =
             generated.into_iter().map(Some).collect();
         let mut seen = HashSet::new();
         let mut out = Vec::new();
+
+        // If the live preedit changed after the stored suggestion list was
+        // built, prefer what is currently visible over that stale list.
+        if !current_suggest_text.is_empty()
+            && !displayed
+                .candidates()
+                .iter()
+                .any(|candidate| candidate.text == current_suggest_text)
+            && let Some(idx) = generated.iter().position(|candidate| {
+                candidate
+                    .as_ref()
+                    .is_some_and(|ac| ac.text == current_suggest_text)
+            })
+            && let Some(ac) = generated[idx].take()
+        {
+            seen.insert(ac.text.clone());
+            out.push(ac.into_candidate(reading));
+        }
 
         for shown in displayed.candidates() {
             if !seen.insert(shown.text.clone()) {
@@ -140,14 +159,13 @@ impl InputMethodEngine {
         // displayed candidate survives even if re-inference diverges.
         let prev_suggest_text = self.live_text_with_pending();
         self.live.shown = false;
-        let displayed_candidates = if learning == LearningLookup::Use
-            && !self.shown_suggestions.is_empty()
-        {
-            Some(std::mem::take(&mut self.shown_suggestions))
-        } else {
-            self.shown_suggestions = CandidateList::default();
-            None
-        };
+        let displayed_candidates =
+            if learning == LearningLookup::Use && !self.shown_suggestions.is_empty() {
+                Some(std::mem::take(&mut self.shown_suggestions))
+            } else {
+                self.shown_suggestions = CandidateList::default();
+                None
+            };
 
         if reading.is_empty() {
             return EngineResult::consumed();
@@ -169,7 +187,7 @@ impl InputMethodEngine {
         {
             candidates.insert(
                 0,
-                AnnotatedCandidate::new(prev_suggest_text, CandidateSource::Model),
+                AnnotatedCandidate::new(prev_suggest_text.clone(), CandidateSource::Model),
             );
         }
 
@@ -185,6 +203,7 @@ impl InputMethodEngine {
                 displayed,
                 candidates,
                 &reading,
+                &prev_suggest_text,
             );
             self.settle_candidates(merged)
         } else {

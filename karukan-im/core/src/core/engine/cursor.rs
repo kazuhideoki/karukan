@@ -13,6 +13,9 @@ impl InputMethodEngine {
             self.mode.exit_temporary();
         }
         self.live.shown = false;
+        // Moving the caret hides the suggestion window. Drop the stored list
+        // as well so Right/Ctrl+F cannot commit a stale hidden candidate.
+        self.shown_suggestions = CandidateList::default();
         self.input_buf.set_cursor(new_pos(&self.input_buf));
         self.log_chunk_state("cursor");
         let preedit = self.set_composing_state();
