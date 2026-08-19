@@ -93,11 +93,10 @@ fn backspace_after_double_consonant_restores_pending_consonant() {
 }
 
 #[test]
-fn space_in_empty_hiragana_commits_fullwidth_space() {
-    // Bare Space from Empty in Hiragana mode commits a full-width `　`
-    // directly without entering Composing — the Japanese-IME
-    // convention, but without the side effect of "second Space starts
-    // Conversion mode" that a Composing-state insertion would cause.
+fn space_in_empty_hiragana_commits_halfwidth_space() {
+    // Bare Space from Empty in Hiragana mode commits a half-width ASCII space
+    // directly without entering Composing, avoiding the side effect where a
+    // second Space starts Conversion mode.
     let mut engine = InputMethodEngine::new();
     assert_eq!(engine.input_mode, InputMode::Hiragana);
 
@@ -108,13 +107,29 @@ fn space_in_empty_hiragana_commits_fullwidth_space() {
         EngineAction::Commit(t) => Some(t.clone()),
         _ => None,
     });
-    assert_eq!(committed.as_deref(), Some("\u{3000}"));
+    assert_eq!(committed.as_deref(), Some(" "));
 }
 
 #[test]
-fn double_space_in_empty_hiragana_commits_two_fullwidth_spaces() {
+fn shift_space_in_empty_hiragana_commits_halfwidth_space() {
+    // Shift+Space follows ordinary Space; Ctrl+Space remains the explicit
+    // full-width-space gesture.
+    let mut engine = InputMethodEngine::new();
+
+    let result = engine.process_key(&press_shift(' '));
+    assert!(result.consumed);
+    assert!(matches!(engine.state(), InputState::Empty));
+    let committed = result.actions.iter().find_map(|a| match a {
+        EngineAction::Commit(t) => Some(t.clone()),
+        _ => None,
+    });
+    assert_eq!(committed.as_deref(), Some(" "));
+}
+
+#[test]
+fn double_space_in_empty_hiragana_commits_two_halfwidth_spaces() {
     // Regression for the conversion-mode-on-second-Space issue: two
-    // consecutive Spaces from Empty must produce two committed `　`s,
+    // consecutive Spaces from Empty must produce two committed ASCII spaces,
     // never enter Composing, and never trigger Conversion.
     let mut engine = InputMethodEngine::new();
     for _ in 0..2 {
@@ -124,7 +139,7 @@ fn double_space_in_empty_hiragana_commits_two_fullwidth_spaces() {
             EngineAction::Commit(t) => Some(t.clone()),
             _ => None,
         });
-        assert_eq!(committed.as_deref(), Some("\u{3000}"));
+        assert_eq!(committed.as_deref(), Some(" "));
     }
 }
 
