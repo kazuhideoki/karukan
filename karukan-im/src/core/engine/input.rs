@@ -151,10 +151,10 @@ impl InputMethodEngine {
                 .with_action(EngineAction::UpdateAuxText(self.format_aux_composing()));
         }
 
-        // Bare Space from Empty state:
+        // Space without Ctrl/Alt from Empty state:
         //
-        // * Hiragana mode → commit a full-width `　` directly, matching
-        //   the Japanese-IME convention. We deliberately do NOT enter
+        // * Hiragana mode → commit a half-width ASCII space directly.
+        //   We deliberately do NOT enter
         //   Composing here: if we did, the next Space the user typed
         //   would be interpreted by `process_key_composing` as the
         //   conversion trigger and an unwanted candidate window would
@@ -162,13 +162,13 @@ impl InputMethodEngine {
         // * Any other mode → return `not_consumed` so the OS delivers
         //   a normal half-width ASCII space to the application. The
         //   user is either typing ASCII (Alphabet) or in an edge mode
-        //   (Katakana / Emoji) where injecting `　` would be wrong.
+        //   (Katakana / Emoji) where injecting a space would be unnecessary.
         //
         // The full-width space gesture from Empty in any mode is
         // `Ctrl+Space` (above), which seeds a Composing session.
         if key.keysym == Keysym::SPACE && !key.modifiers.control_key && !key.modifiers.alt_key {
             return if self.input_mode == InputMode::Hiragana {
-                EngineResult::consumed().with_action(EngineAction::Commit("\u{3000}".to_string()))
+                EngineResult::consumed().with_action(EngineAction::Commit(" ".to_string()))
             } else {
                 EngineResult::not_consumed()
             };
