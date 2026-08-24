@@ -131,12 +131,14 @@ impl InputMethodEngine {
             filter,
             candidates,
             preedit: state_preedit,
+            cursor_moved,
             ..
         } = &mut self.state
         {
             *filter = Some(next);
             *candidates = list.clone();
             *state_preedit = preedit.clone();
+            *cursor_moved = false;
         }
         debug!("candidate filter → {:?}", next);
         // After the state assignment: the aux header reads the active filter.

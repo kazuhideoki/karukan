@@ -90,6 +90,51 @@ fn test_conversion_char_refines_reading() {
 }
 
 #[test]
+fn test_conversion_char_commits_after_candidate_cursor_moves() {
+    let mut engine = InputMethodEngine::new();
+
+    engine.process_key(&press('a'));
+    engine.process_key(&press('i'));
+    engine.process_key(&press_key(Keysym::SPACE));
+    engine.process_key(&press_key(Keysym::DOWN));
+    let selected = engine
+        .candidates()
+        .and_then(|candidates| candidates.selected_text())
+        .unwrap()
+        .to_string();
+
+    let result = engine.process_key(&press('k'));
+
+    assert_eq!(committed(&result).as_deref(), Some(selected.as_str()));
+    assert!(matches!(engine.state(), InputState::Composing { .. }));
+    assert_eq!(engine.preedit().unwrap().text(), "k");
+
+    engine.process_key(&press('a'));
+    assert_eq!(engine.preedit().unwrap().text(), "か");
+}
+
+#[test]
+fn test_conversion_digit_commits_after_candidate_cursor_moves() {
+    let mut engine = InputMethodEngine::new();
+
+    engine.process_key(&press('a'));
+    engine.process_key(&press('i'));
+    engine.process_key(&press_key(Keysym::SPACE));
+    engine.process_key(&press_key(Keysym::SPACE));
+    let selected = engine
+        .candidates()
+        .and_then(|candidates| candidates.selected_text())
+        .unwrap()
+        .to_string();
+
+    let result = engine.process_key(&press('2'));
+
+    assert_eq!(committed(&result).as_deref(), Some(selected.as_str()));
+    assert!(matches!(engine.state(), InputState::Composing { .. }));
+    assert_eq!(engine.preedit().unwrap().text(), "2");
+}
+
+#[test]
 fn test_alphabet_mode_space_inserts_literal_space() {
     let mut engine = InputMethodEngine::new();
 
