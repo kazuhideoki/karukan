@@ -259,6 +259,7 @@ impl InputMethodEngine {
             reading: reading.to_string(),
             // A fresh conversion always starts unfiltered
             filter: None,
+            cursor_moved: false,
         };
 
         // After the state assignment: the aux header reads the active filter.
@@ -696,17 +697,22 @@ impl InputMethodEngine {
                     }
 
                     // Ctrl+1..9: select and commit that candidate. Bare
-                    // digits refine below like any printable character, so
-                    // typing numbers never conflicts with selection.
+                    // digits follow the printable-key path below: they
+                    // refine until candidate navigation makes a selection
+                    // explicit, then begin the next composition.
                     if let Some(digit) = key.keysym.digit_value() {
                         return self.select_shown_candidate(digit);
                     }
                 }
 
-                // A printable character refines instead of committing:
-                // the reading grows and the suggestion rewrites in place,
-                // keeping any active source filter.
+                // Once candidate navigation has made the selection explicit,
+                // a printable character accepts it and starts the next
+                // composition. Before navigation, typing keeps the existing
+                // incremental-refinement behavior.
                 if key.to_char().is_some() && !key.modifiers.control_key {
+                    if self.state.cursor_moved() {
+                        return self.commit_conversion_and_start_input(key, shift_active);
+                    }
                     return self.refine_through_composing(key, shift_active);
                 }
 
@@ -820,6 +826,33 @@ impl InputMethodEngine {
             .with_action(EngineAction::Commit(text))
     }
 
+    /// Accept the explicitly navigated candidate, then process the printable
+    /// key as the first character of a new composition. Both action groups
+    /// are returned together so frontends commit the old marked text before
+    /// displaying the new one.
+    fn commit_conversion_and_start_input(
+        &mut self,
+        key: &KeyEvent,
+        shift_active: bool,
+    ) -> EngineResult {
+        let Some((text, reading)) = self.selected_conversion_info() else {
+            return EngineResult::not_consumed();
+        };
+        if text.is_empty() {
+            return EngineResult::consumed();
+        }
+
+        self.finish_conversion(&text, &reading);
+        let next = self.process_key_empty(key, shift_active);
+
+        let mut result = EngineResult::consumed()
+            .with_action(EngineAction::HideCandidates)
+            .with_action(EngineAction::HideAuxText)
+            .with_action(EngineAction::Commit(text));
+        result.actions.extend(next.actions);
+        result
+    }
+
     /// Whether the selected candidate can be removed from the learning
     /// history. False when nothing is selected, so the delete chord stays
     /// inert outside the case it is meant for.
@@ -861,6 +894,7 @@ impl InputMethodEngine {
         // narrowed view and chew through the list top-down.
         let prev_filter = self.state.filter();
         let prev_cursor = self.state.candidates().map(|c| c.cursor()).unwrap_or(0);
+        let prev_cursor_moved = self.state.cursor_moved();
 
         let candidates = self.build_conversion_candidates(
             &reading,
@@ -879,7 +913,7 @@ impl InputMethodEngine {
             result = self.apply_candidate_filter(source);
         }
         if self.state.candidates().is_some_and(|c| !c.is_empty()) {
-            return self.navigate_candidate(|c| {
+            return self.navigate_candidate(prev_cursor_moved, |c| {
                 c.set_cursor(prev_cursor);
                 true
             });
@@ -910,9 +944,18 @@ impl InputMethodEngine {
     }
 
     /// Navigate candidates with the given operation, then update preedit
-    fn navigate_candidate(&mut self, op: impl FnOnce(&mut CandidateList) -> bool) -> EngineResult {
-        let (selected_text, candidates) = {
-            let Some(candidates) = self.state.candidates_mut() else {
+    fn navigate_candidate(
+        &mut self,
+        mark_explicit: bool,
+        op: impl FnOnce(&mut CandidateList) -> bool,
+    ) -> EngineResult {
+        let (selected_text, candidates, moved) = {
+            let InputState::Conversion {
+                candidates,
+                cursor_moved,
+                ..
+            } = &mut self.state
+            else {
                 return EngineResult::not_consumed();
             };
             // Nothing to navigate in an empty (source-filtered) view; keep
@@ -920,31 +963,35 @@ impl InputMethodEngine {
             if candidates.is_empty() {
                 return EngineResult::consumed();
             }
-            op(candidates);
+            let moved = op(candidates);
+            *cursor_moved |= mark_explicit && moved;
             let text = candidates.selected_text().unwrap_or("").to_string();
-            (text, candidates.clone())
+            (text, candidates.clone(), moved)
         };
+        if !moved {
+            return EngineResult::consumed();
+        }
         self.update_conversion_preedit(&selected_text, candidates)
     }
 
     /// Select next candidate
     fn next_candidate(&mut self) -> EngineResult {
-        self.navigate_candidate(CandidateList::move_next)
+        self.navigate_candidate(true, CandidateList::move_next)
     }
 
     /// Select previous candidate
     fn prev_candidate(&mut self) -> EngineResult {
-        self.navigate_candidate(CandidateList::move_prev)
+        self.navigate_candidate(true, CandidateList::move_prev)
     }
 
     /// Go to next candidate page
     fn next_candidate_page(&mut self) -> EngineResult {
-        self.navigate_candidate(CandidateList::next_page)
+        self.navigate_candidate(true, CandidateList::next_page)
     }
 
     /// Go to previous candidate page
     fn prev_candidate_page(&mut self) -> EngineResult {
-        self.navigate_candidate(CandidateList::prev_page)
+        self.navigate_candidate(true, CandidateList::prev_page)
     }
 
     /// Select and commit the candidate at `page_index` (0-based) within the

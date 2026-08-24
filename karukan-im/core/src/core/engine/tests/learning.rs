@@ -132,6 +132,33 @@ fn ctrl_delete_removes_selected_learning_entry() {
 }
 
 #[test]
+fn ctrl_delete_without_navigation_keeps_typing_as_refinement() {
+    let mut engine = engine_with_learned("あい", "藍");
+
+    engine.process_key(&press('a'));
+    engine.process_key(&press('i'));
+    engine.process_key(&press_key(Keysym::SPACE));
+    engine.process_key(&press_ctrl(Keysym::DELETE));
+
+    // Rebuilding the list restores its cursor internally, but that is not a
+    // user candidate-navigation gesture. The next character must therefore
+    // keep refining the existing reading instead of accepting the replacement
+    // candidate selected by the rebuild.
+    let result = engine.process_key(&press('k'));
+    assert!(
+        !result
+            .actions
+            .iter()
+            .any(|action| matches!(action, EngineAction::Commit(_))),
+        "internal cursor restoration must not make the selection explicit",
+    );
+    assert!(matches!(engine.state(), InputState::Composing { .. }));
+
+    engine.process_key(&press('a'));
+    assert_eq!(engine.input_buf.reading(), "あいか");
+}
+
+#[test]
 fn ctrl_delete_removes_prefix_twins_so_surface_does_not_resurface() {
     // The same surface learned under two prefix-related readings is shown as a
     // single deduped row; deleting it must clear both, or the twin under the

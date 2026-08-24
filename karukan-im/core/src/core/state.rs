@@ -28,6 +28,10 @@ pub enum InputState {
         reading: String,
         /// Active Ctrl+R source filter; `None` shows the full list
         filter: Option<CandidateSource>,
+        /// Whether the user has moved the candidate cursor after opening
+        /// this conversion. Once they have, a printable key accepts that
+        /// explicit selection and starts the next composition.
+        cursor_moved: bool,
     },
 }
 
@@ -61,6 +65,17 @@ impl InputState {
             Self::Conversion { filter, .. } => *filter,
             _ => None,
         }
+    }
+
+    /// Whether candidate navigation made the current selection explicit.
+    pub fn cursor_moved(&self) -> bool {
+        matches!(
+            self,
+            Self::Conversion {
+                cursor_moved: true,
+                ..
+            }
+        )
     }
 
     /// The reading a conversion was built from, if in the Conversion state.
