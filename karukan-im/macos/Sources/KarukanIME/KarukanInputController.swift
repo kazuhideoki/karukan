@@ -103,6 +103,11 @@ class KarukanInputController: IMKInputController {
 
     // MARK: - Lifecycle
 
+    override func activateServer(_ sender: Any!) {
+        engineClient.reloadUserDictionaryIfChangedAsync()
+        super.activateServer(sender)
+    }
+
     override func deactivateServer(_ sender: Any!) {
         // A right-⌘ press armed before a focus switch must not fire after
         // it (e.g. right-⌘-clicking another window).

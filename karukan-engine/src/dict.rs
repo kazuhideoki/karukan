@@ -102,6 +102,47 @@ impl Dictionary {
         })
     }
 
+    /// Build a dictionary from simple `(reading, surface)` pairs.
+    ///
+    /// Empty fields are ignored, katakana readings are normalized to
+    /// hiragana, and duplicate surfaces for the same reading are removed.
+    /// Returns `None` when no usable pairs remain.
+    pub fn from_pairs(pairs: impl IntoIterator<Item = (String, String)>) -> Result<Option<Self>> {
+        let mut groups: HashMap<String, Vec<String>> = HashMap::new();
+
+        for (reading, surface) in pairs {
+            if reading.is_empty() || surface.is_empty() {
+                continue;
+            }
+            let reading = crate::kana::katakana_to_hiragana(&reading);
+            let surfaces = groups.entry(reading).or_default();
+            if !surfaces.contains(&surface) {
+                surfaces.push(surface);
+            }
+        }
+
+        if groups.is_empty() {
+            return Ok(None);
+        }
+
+        let mut entries: Vec<DictEntry> = groups
+            .into_iter()
+            .map(|(reading, surfaces)| DictEntry {
+                reading,
+                candidates: surfaces
+                    .into_iter()
+                    .map(|surface| Candidate {
+                        surface,
+                        score: 0.0,
+                    })
+                    .collect(),
+            })
+            .collect();
+        entries.sort_by(|a, b| a.reading.as_bytes().cmp(b.reading.as_bytes()));
+
+        Self::build_from_entries(entries).map(Some)
+    }
+
     /// Build a Dictionary from a JSON file.
     ///
     /// The JSON format is an array of `{reading, candidates: [{surface, score}]}`.
@@ -1042,6 +1083,29 @@ col0,col1,col2,4500,今日,col5,col6,col7,col8,col9,col10,キョウ
         assert_eq!(result.candidates.len(), 2);
         assert_eq!(result.candidates[0].surface, "今日");
         assert_eq!(result.candidates[1].surface, "京");
+    }
+
+    #[test]
+    fn test_from_pairs_normalizes_and_deduplicates() {
+        let dict = Dictionary::from_pairs(vec![
+            ("カンジ".to_string(), "漢字".to_string()),
+            ("かんじ".to_string(), "漢字".to_string()),
+            ("かんじ".to_string(), "感じ".to_string()),
+            (String::new(), "ignored".to_string()),
+        ])
+        .unwrap()
+        .unwrap();
+
+        let result = dict.exact_match_search("かんじ").unwrap();
+        assert_eq!(result.candidates.len(), 2);
+        assert_eq!(result.candidates[0].surface, "漢字");
+        assert_eq!(result.candidates[1].surface, "感じ");
+    }
+
+    #[test]
+    fn test_from_pairs_returns_none_without_usable_entries() {
+        let dict = Dictionary::from_pairs(vec![(String::new(), "ignored".to_string())]).unwrap();
+        assert!(dict.is_none());
     }
 
     #[test]

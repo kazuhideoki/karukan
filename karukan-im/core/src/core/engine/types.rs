@@ -292,6 +292,8 @@ pub(in crate::core) struct Dictionaries {
     pub system: Option<Dictionary>,
     /// User dictionary (merged from user_dict_paths)
     pub user: Option<Dictionary>,
+    /// User dictionary supplied by the platform frontend (for example macOS).
+    pub platform_user: Option<Dictionary>,
 }
 
 /// Conversion model dispatch strategy based on input length

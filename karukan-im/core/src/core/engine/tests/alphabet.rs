@@ -193,6 +193,25 @@ fn test_alphabet_mode_direct_input() {
 }
 
 #[test]
+fn test_alphabet_mode_suggests_ascii_platform_shortcut() {
+    let mut engine = InputMethodEngine::new();
+    engine
+        .set_platform_user_dictionary(&[("ced".to_string(), "address@example.com".to_string())])
+        .unwrap();
+    engine.mode.enter_temporary(InputMode::Alphabet);
+
+    for ch in "ced".chars() {
+        engine.process_key(&press(ch));
+    }
+    let texts: Vec<String> = engine
+        .lookup_dict_candidates(&engine.input_buf.reading())
+        .into_iter()
+        .map(|candidate| candidate.text)
+        .collect();
+    assert!(texts.contains(&"address@example.com".to_string()));
+}
+
+#[test]
 fn test_mixed_hiragana_alphabet_input() {
     let mut engine = InputMethodEngine::new();
 

@@ -84,6 +84,26 @@ fn pending_romaji_narrows_predictive_candidates() {
     assert!(!texts.contains(&"ワセリン".to_string()));
 }
 
+#[test]
+fn pending_romaji_does_not_exact_match_regular_user_dictionary() {
+    let mut engine = InputMethodEngine::new();
+    engine.dicts.user = Some(dict_from_json(
+        r#"[{"reading":"せ","candidates":[{"surface":"MustNotSwallowTail","score":1000.0}]}]"#,
+    ));
+
+    for ch in "ced".chars() {
+        engine.process_key(&press(ch));
+    }
+    assert_eq!(engine.input_buf.reading(), "せ");
+    assert_eq!(engine.input_buf.pending(), "d");
+    assert!(
+        engine
+            .lookup_dict_candidates(&engine.input_buf.reading())
+            .iter()
+            .all(|candidate| candidate.text != "MustNotSwallowTail")
+    );
+}
+
 /// A tail that cannot become kana (`yk`) suppresses prediction entirely.
 #[test]
 fn dead_romaji_tail_suppresses_prediction() {
