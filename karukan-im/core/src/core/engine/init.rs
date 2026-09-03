@@ -100,6 +100,16 @@ impl InputMethodEngine {
     /// Until they arrive (or if loading fails) the engine runs with what it
     /// has: romaji conversion, dictionaries, learning cache, rewriters.
     pub fn init_from_settings(&mut self, settings: &Settings) -> Result<()> {
+        self.init_from_settings_with_user_dictionary(settings, &[])
+    }
+
+    /// Initialize the engine with user dictionary entries supplied by a
+    /// platform frontend. File dictionaries retain priority over these entries.
+    pub fn init_from_settings_with_user_dictionary(
+        &mut self,
+        settings: &Settings,
+        user_dictionary: &[(String, String)],
+    ) -> Result<()> {
         tracing::info!(
             "Karukan init: model={:?}, light_model={:?}, strategy={:?}",
             settings.conversion.model,
@@ -109,6 +119,7 @@ impl InputMethodEngine {
 
         self.init_system_dictionary(settings.conversion.dict_path.as_deref());
         self.init_user_dictionaries();
+        self.set_platform_user_dictionary(user_dictionary)?;
         self.init_learning_cache(
             settings.learning.enabled,
             LearningConfig {
@@ -330,5 +341,29 @@ impl InputMethodEngine {
                 debug!("Failed to merge user dictionaries: {}", e);
             }
         }
+    }
+
+    /// Replace only the platform-provided dictionary. File dictionaries stay
+    /// untouched, keeping this frontend adapter independent from their loader.
+    pub fn set_platform_user_dictionary(&mut self, entries: &[(String, String)]) -> Result<()> {
+        let mut pairs = Vec::with_capacity(entries.len() * 2);
+        for (reading, surface) in entries {
+            pairs.push((reading.clone(), surface.clone()));
+            if reading.is_ascii() {
+                let kana_mode_reading = self
+                    .converters
+                    .romaji
+                    .convert_flush(&reading.to_ascii_lowercase());
+                if kana_mode_reading != *reading {
+                    pairs.push((kana_mode_reading, surface.clone()));
+                }
+            }
+        }
+        self.dicts.platform_user = Dictionary::from_pairs(pairs)?;
+        debug!(
+            "Platform user dictionary loaded ({} entries)",
+            entries.len()
+        );
+        Ok(())
     }
 }

@@ -10,7 +10,8 @@ let package = Package(
             name: "KarukanIME",
             path: "Sources/KarukanIME",
             linkerSettings: [
-                .linkedFramework("InputMethodKit")
+                .linkedFramework("InputMethodKit"),
+                .linkedLibrary("sqlite3"),
             ]
         ),
         .testTarget(
