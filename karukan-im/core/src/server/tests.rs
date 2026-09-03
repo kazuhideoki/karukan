@@ -7,6 +7,9 @@ use crate::core::keycode::Keysym;
 // XKB keysyms for common keys (u32 aliases for the JSON payloads below)
 const XKB_KEY_K: u32 = Keysym::KEY_K.0;
 const XKB_KEY_A: u32 = Keysym::KEY_A.0;
+const XKB_KEY_C: u32 = b'c' as u32;
+const XKB_KEY_D: u32 = b'd' as u32;
+const XKB_KEY_E: u32 = b'e' as u32;
 const XKB_KEY_LOWER_L: u32 = Keysym::KEY_L.0;
 const XKB_KEY_RETURN: u32 = Keysym::RETURN.0;
 const XKB_KEY_ESCAPE: u32 = Keysym::ESCAPE.0;
@@ -241,4 +244,108 @@ fn test_status_before_init() {
     );
     assert_eq!(resp["result"]["initialized"], false);
     assert_eq!(resp["result"]["state"], "empty");
+}
+
+#[test]
+fn test_init_loads_platform_user_dictionary() {
+    let mut server = test_server();
+    let resp = request(
+        &mut server,
+        json!({"jsonrpc":"2.0","id":30,"method":"init","params":{
+            "user_dictionary":[{"reading":"か","surface":"KarukanMacUserEntry"}]
+        }}),
+    );
+    assert!(resp["error"].is_null());
+
+    press(&mut server, XKB_KEY_K);
+    press(&mut server, XKB_KEY_A);
+    let resp = press(&mut server, XKB_KEY_SPACE);
+    let candidates = &actions_of(&resp, "show_candidates").last().unwrap()["candidates"];
+    assert!(
+        candidates
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|candidate| candidate["text"] == "KarukanMacUserEntry")
+    );
+}
+
+#[test]
+fn test_reload_platform_user_dictionary_replaces_removed_entries() {
+    let mut server = test_server();
+    request(
+        &mut server,
+        json!({"jsonrpc":"2.0","id":31,"method":"init","params":{
+            "user_dictionary":[{"reading":"か","surface":"BeforeReload"}]
+        }}),
+    );
+    request(
+        &mut server,
+        json!({"jsonrpc":"2.0","id":32,"method":"reload_user_dictionary","params":{
+            "user_dictionary":[{"reading":"か","surface":"AfterReload"}]
+        }}),
+    );
+
+    press(&mut server, XKB_KEY_K);
+    press(&mut server, XKB_KEY_A);
+    let resp = press(&mut server, XKB_KEY_SPACE);
+    let candidates = actions_of(&resp, "show_candidates").last().unwrap()["candidates"]
+        .as_array()
+        .unwrap();
+    assert!(
+        candidates
+            .iter()
+            .any(|candidate| candidate["text"] == "AfterReload")
+    );
+    assert!(
+        !candidates
+            .iter()
+            .any(|candidate| candidate["text"] == "BeforeReload")
+    );
+}
+
+#[test]
+fn test_ascii_platform_shortcut_is_suggested_in_kana_mode() {
+    let mut server = test_server();
+    request(
+        &mut server,
+        json!({"jsonrpc":"2.0","id":35,"method":"init","params":{
+            "user_dictionary":[{"reading":"ced","surface":"address@example.com"}]
+        }}),
+    );
+
+    press(&mut server, XKB_KEY_C);
+    press(&mut server, XKB_KEY_E);
+    let resp = press(&mut server, XKB_KEY_D);
+    let candidates = actions_of(&resp, "show_candidates").last().unwrap()["candidates"]
+        .as_array()
+        .unwrap();
+    assert!(
+        candidates
+            .iter()
+            .any(|candidate| candidate["text"] == "address@example.com")
+    );
+}
+
+#[test]
+fn test_init_rejects_malformed_platform_user_dictionary_entry() {
+    let mut server = test_server();
+    let resp = request(
+        &mut server,
+        json!({"jsonrpc":"2.0","id":33,"method":"init","params":{
+            "user_dictionary":[{"reading":"か"}]
+        }}),
+    );
+    assert_eq!(resp["error"]["code"], -32602);
+}
+
+#[test]
+fn test_init_without_params_remains_supported() {
+    let mut server = test_server();
+    let resp = request(
+        &mut server,
+        json!({"jsonrpc":"2.0","id":34,"method":"init"}),
+    );
+    assert!(resp["error"].is_null());
+    assert_eq!(resp["result"]["protocol_version"], 1);
 }

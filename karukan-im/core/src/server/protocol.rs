@@ -98,6 +98,19 @@ impl RpcError {
 
 // === Params ===
 
+#[derive(Debug, Default, Deserialize)]
+pub struct InitParams {
+    /// Platform-provided text replacements, such as the macOS user dictionary.
+    #[serde(default)]
+    pub user_dictionary: Vec<UserDictionaryEntry>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UserDictionaryEntry {
+    pub reading: String,
+    pub surface: String,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct ProcessKeyParams {
     /// XKB keysym value (e.g. 0x0061 = 'a', 0xff0d = Return).

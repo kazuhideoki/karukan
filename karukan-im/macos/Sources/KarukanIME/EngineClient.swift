@@ -14,6 +14,7 @@ class EngineClient {
 
     private let lock = NSLock()
     private var pendingRequests: [Int: (Data?) -> Void] = [:]
+    private var lastUserDictionaryEntries: [MacUserDictionaryEntry]?
 
     /// `autoInit` re-sends `init` whenever the server (re)starts. Tests
     /// disable it to avoid loading models.
@@ -30,7 +31,9 @@ class EngineClient {
     // MARK: - Engine methods
 
     func initAsync() {
-        sendRequest(method: "init", params: [:]) { [weak self] data in
+        let entries = MacUserDictionary.currentEntries()
+        lastUserDictionaryEntries = entries
+        sendRequest(method: "init", params: userDictionaryParams(entries)) { [weak self] data in
             guard let self else { return }
             guard let data,
                 let result = try? makeProtocolDecoder().decode(InitResult.self, from: data)
@@ -43,6 +46,28 @@ class EngineClient {
                 "KarukanIME: engine initialized (protocol v\(result.protocolVersion), model=\(result.modelName))"
             )
         }
+    }
+
+    /// Refresh platform text replacements when the input method becomes active.
+    /// The public API has no dictionary-change notification, so compare a
+    /// deterministic snapshot and only rebuild the engine dictionary on change.
+    func reloadUserDictionaryIfChangedAsync() {
+        let entries = MacUserDictionary.currentEntries()
+        guard entries != lastUserDictionaryEntries else { return }
+        sendRequest(method: "reload_user_dictionary", params: userDictionaryParams(entries)) {
+            [weak self] data in
+            guard data != nil else {
+                NSLog("KarukanIME: user dictionary reload failed")
+                return
+            }
+            DispatchQueue.main.async {
+                self?.lastUserDictionaryEntries = entries
+            }
+        }
+    }
+
+    private func userDictionaryParams(_ entries: [MacUserDictionaryEntry]) -> [String: Any] {
+        ["user_dictionary": entries.map(\.jsonObject)]
     }
 
     func processKeySync(_ key: EngineKeyEvent) -> KeyResult? {

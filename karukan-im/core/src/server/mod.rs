@@ -15,8 +15,9 @@ use crate::core::keycode::{KeyEvent, Keysym};
 use crate::core::state::InputState;
 
 use protocol::{
-    Action, CandidateItem, InitResult, KeyResult, PROTOCOL_VERSION, PreeditAttr, ProcessKeyParams,
-    Request, Response, RpcError, SelectCandidateParams, StatusResult, SurroundingTextParams,
+    Action, CandidateItem, InitParams, InitResult, KeyResult, PROTOCOL_VERSION, PreeditAttr,
+    ProcessKeyParams, Request, Response, RpcError, SelectCandidateParams, StatusResult,
+    SurroundingTextParams,
 };
 
 /// JSON-RPC dispatcher owning the engine instance.
@@ -84,7 +85,18 @@ impl ImServer {
 
     fn dispatch(&mut self, method: &str, params: Value) -> Result<Value, RpcError> {
         match method {
-            "init" => self.handle_init(),
+            "init" => {
+                let params = parse_init_params(params)?;
+                self.handle_init(params)
+            }
+            "reload_user_dictionary" => {
+                let params = parse_init_params(params)?;
+                let entries = user_dictionary_pairs(params);
+                self.engine
+                    .set_platform_user_dictionary(&entries)
+                    .map_err(|e| RpcError::new(RpcError::INIT_FAILED, format!("{e:#}")))?;
+                Ok(json!({}))
+            }
             "process_key" => {
                 let params: ProcessKeyParams = parse_params(params)?;
                 let event =
@@ -141,13 +153,17 @@ impl ImServer {
         }
     }
 
-    fn handle_init(&mut self) -> Result<Value, RpcError> {
+    fn handle_init(&mut self, params: InitParams) -> Result<Value, RpcError> {
         if !self.initialized {
             let settings = self
                 .settings
                 .take()
                 .unwrap_or_else(|| Settings::load().unwrap_or_default());
-            if let Err(e) = self.engine.init_from_settings(&settings) {
+            let entries = user_dictionary_pairs(params);
+            if let Err(e) = self
+                .engine
+                .init_from_settings_with_user_dictionary(&settings, &entries)
+            {
                 // Keep the settings so a retried `init` uses the same ones.
                 self.settings = Some(settings);
                 return Err(RpcError::new(RpcError::INIT_FAILED, format!("{e:#}")));
@@ -170,6 +186,22 @@ impl ImServer {
             process_key_ms: self.engine.last_process_key_ms(),
         })
         .map_err(internal_error)
+    }
+}
+
+fn user_dictionary_pairs(params: InitParams) -> Vec<(String, String)> {
+    params
+        .user_dictionary
+        .into_iter()
+        .map(|entry| (entry.reading, entry.surface))
+        .collect()
+}
+
+fn parse_init_params(params: Value) -> Result<InitParams, RpcError> {
+    if params.is_null() {
+        Ok(InitParams::default())
+    } else {
+        parse_params(params)
     }
 }
 

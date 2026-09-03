@@ -288,23 +288,41 @@ impl InputMethodEngine {
         only: Option<CandidateSource>,
     ) -> Vec<AnnotatedCandidate> {
         let dicts = [
-            (self.dicts.user.as_ref(), CandidateSource::UserDictionary),
-            (self.dicts.system.as_ref(), CandidateSource::Dictionary),
+            (
+                self.dicts.user.as_ref(),
+                CandidateSource::UserDictionary,
+                false,
+            ),
+            (
+                self.dicts.platform_user.as_ref(),
+                CandidateSource::UserDictionary,
+                true,
+            ),
+            (
+                self.dicts.system.as_ref(),
+                CandidateSource::Dictionary,
+                false,
+            ),
         ]
         .into_iter()
-        .filter(|(_, source)| only.is_none_or(|o| o == *source))
+        .filter(|(_, source, _)| only.is_none_or(|o| o == *source))
         .collect::<Vec<_>>();
         let mut candidates = Vec::new();
         let mut seen = HashSet::new();
 
-        // Exact matches, user dictionary first — only when no romaji tail
-        // is pending (an exact hit on the base would ignore the typed
-        // tail). Candidates are sorted by score at build/load time
-        for &(dict, source) in &dicts {
-            if !pending.is_empty() {
-                break;
-            }
-            let Some(result) = dict.and_then(|d| d.exact_match_search(reading)) else {
+        // Keep the existing exact-match rule for regular dictionaries: a
+        // pending romaji tail must not be ignored. Platform shortcuts are the
+        // one exception because their kana-mode key includes that literal
+        // tail (`ced` -> `せd`).
+        let settled_reading =
+            (!pending.is_empty()).then(|| self.input_buf.settled_reading(&self.converters.romaji));
+        for &(dict, source, accepts_settled_tail) in &dicts {
+            let exact_reading = match settled_reading.as_deref() {
+                None => reading,
+                Some(settled) if accepts_settled_tail => settled,
+                Some(_) => continue,
+            };
+            let Some(result) = dict.and_then(|d| d.exact_match_search(exact_reading)) else {
                 continue;
             };
             for cand in result.candidates {
@@ -312,7 +330,10 @@ impl InputMethodEngine {
                     break;
                 }
                 if seen.insert(cand.surface.clone()) {
-                    candidates.push(AnnotatedCandidate::new(cand.surface.clone(), source));
+                    candidates.push(
+                        AnnotatedCandidate::new(cand.surface.clone(), source)
+                            .with_reading((exact_reading != reading).then(|| exact_reading.into())),
+                    );
                 }
             }
         }
@@ -326,7 +347,7 @@ impl InputMethodEngine {
             && !matches!(constraint, TailConstraint::Dead)
         {
             let mut budget = predictive_limit;
-            for &(dict, source) in &dicts {
+            for &(dict, source, _) in &dicts {
                 if budget == 0 {
                     break;
                 }
