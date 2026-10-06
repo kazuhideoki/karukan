@@ -33,6 +33,18 @@ impl InputMethodEngine {
             self.chunks.clear();
             return None;
         }
+        if let Some(preferred) = self
+            .learning
+            .as_ref()
+            .and_then(|c| c.preferred(&full_reading))
+        {
+            let converted = preferred.to_string();
+            self.chunks = vec![ComposingChunk {
+                reading: full_reading.clone(),
+                converted: converted.clone(),
+            }];
+            return (converted != full_reading).then_some(converted);
+        }
         let text: Vec<char> = full_reading.chars().collect();
         let base_ctx = self.truncate_context_for_api();
 

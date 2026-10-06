@@ -15,6 +15,8 @@ fn append_candidates_dedup(target: &mut Vec<Candidate>, source: Vec<Candidate>) 
 impl InputMethodEngine {
     /// Refresh the input state: rebuild preedit and run auto-suggest for candidates.
     pub(super) fn refresh_input_state(&mut self) -> EngineResult {
+        // Editing after Escape invalidates the tentative correction.
+        self.reverted_reading = None;
         let full_reading = self.input_buf.reading();
 
         // Alphabet mode with active live conversion but no kana left to convert:
@@ -413,6 +415,15 @@ impl InputMethodEngine {
         (reading, text)
     }
 
+    /// Share correction recording between Enter and frontend focus-out commits.
+    pub(super) fn record_composing_learning(&mut self, reading: &str, text: &str) {
+        if self.reverted_reading.as_deref() == Some(reading) && text == reading {
+            self.record_preference(reading, text);
+        } else {
+            self.record_learning(reading, text);
+        }
+    }
+
     /// Commit the current composition (Enter).
     pub(super) fn commit_composing(&mut self) -> EngineResult {
         let (reading, text) = self.resolve_composing_commit();
@@ -424,7 +435,7 @@ impl InputMethodEngine {
                 .with_action(EngineAction::HideAuxText);
         }
 
-        self.record_learning(&reading, &text);
+        self.record_composing_learning(&reading, &text);
         self.end_composition();
 
         // HideCandidates is required here: the auto-suggest/live-conversion
@@ -443,6 +454,7 @@ impl InputMethodEngine {
     pub(super) fn cancel_composing(&mut self) -> EngineResult {
         // If live conversion is active, first Escape returns to hiragana display
         if !self.live_text().is_empty() {
+            self.reverted_reading = Some(self.input_buf.settled_reading(&self.converters.romaji));
             self.live.shown = false;
             let preedit = self.set_composing_state();
             return EngineResult::consumed()

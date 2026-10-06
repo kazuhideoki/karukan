@@ -59,6 +59,7 @@ impl Default for LearningConfig {
 #[derive(Debug)]
 pub struct LearningCache {
     entries: HashMap<String, Vec<LearningEntry>>,
+    preferred: HashMap<String, String>,
     max_entries: usize,
     max_surface_chars: usize,
     dirty: bool,
@@ -69,6 +70,7 @@ impl LearningCache {
     pub fn new(config: LearningConfig) -> Self {
         Self {
             entries: HashMap::new(),
+            preferred: HashMap::new(),
             max_entries: config.max_entries,
             max_surface_chars: config.max_surface_chars,
             dirty: false,
@@ -99,6 +101,22 @@ impl LearningCache {
         self.dirty = true;
     }
 
+    /// Remember a deliberate correction, ahead of frequency-based history.
+    pub fn prefer(&mut self, reading: &str, surface: &str) {
+        if reading.is_empty() || surface.chars().count() > self.max_surface_chars {
+            return;
+        }
+        self.record(reading, surface);
+        self.preferred
+            .insert(reading.to_string(), surface.to_string());
+        self.dirty = true;
+    }
+
+    /// Exact matches only: corrections never override longer readings.
+    pub fn preferred(&self, reading: &str) -> Option<&str> {
+        self.preferred.get(reading).map(String::as_str)
+    }
+
     /// Remove every learned entry that would resurface `surface` for input
     /// `reading`: the exact-reading entry plus every longer reading with
     /// `reading` as a prefix (the [`prefix_lookup`](Self::prefix_lookup)
@@ -117,6 +135,8 @@ impl LearningCache {
             !entries.is_empty()
         });
         if removed {
+            self.preferred
+                .retain(|r, s| !(r.starts_with(reading) && s == surface));
             self.dirty = true;
         }
         removed
@@ -132,7 +152,12 @@ impl LearningCache {
             .iter()
             .map(|e| (e.surface.clone(), score(e, now)))
             .collect();
-        scored.sort_by(|a, b| b.1.total_cmp(&a.1));
+        scored.sort_by(|a, b| {
+            let preferred = self.preferred(reading);
+            (preferred == Some(b.0.as_str()))
+                .cmp(&(preferred == Some(a.0.as_str())))
+                .then_with(|| b.1.total_cmp(&a.1))
+        });
         scored
     }
 
@@ -154,7 +179,8 @@ impl LearningCache {
 
     /// Load a learning cache from a TSV file.
     ///
-    /// Format: `reading\tsurface\tfrequency\tlast_access`
+    /// Format: `reading\tsurface\tfrequency\tlast_access[\tpreferred]`.
+    /// The optional fifth column marks an explicit correction; old files remain readable.
     /// Lines starting with `#` are comments.
     pub fn load(path: &Path, config: LearningConfig) -> anyhow::Result<Self> {
         let file = std::fs::File::open(path)?;
@@ -182,6 +208,11 @@ impl LearningCache {
                 Err(_) => continue,
             };
 
+            if parts.get(4) == Some(&"preferred") {
+                cache
+                    .preferred
+                    .insert(reading.to_string(), surface.to_string());
+            }
             cache
                 .entries
                 .entry(reading.to_string())
@@ -201,6 +232,11 @@ impl LearningCache {
     /// Save the cache to a TSV file, evicting low-score entries if over capacity.
     pub fn save(&mut self, path: &Path) -> anyhow::Result<()> {
         self.evict();
+        self.preferred.retain(|r, s| {
+            self.entries
+                .get(r)
+                .is_some_and(|es| es.iter().any(|e| &e.surface == s))
+        });
 
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
@@ -219,8 +255,16 @@ impl LearningCache {
                 for entry in entries {
                     writeln!(
                         writer,
-                        "{}\t{}\t{}\t{}",
-                        reading, entry.surface, entry.frequency, entry.last_access
+                        "{}\t{}\t{}\t{}\t{}",
+                        reading,
+                        entry.surface,
+                        entry.frequency,
+                        entry.last_access,
+                        if self.preferred(reading) == Some(entry.surface.as_str()) {
+                            "preferred"
+                        } else {
+                            ""
+                        }
                     )?;
                 }
             }
@@ -323,6 +367,27 @@ mod tests {
         LearningCache::new(config_with(max_entries))
     }
     use tempfile::NamedTempFile;
+
+    #[test]
+    fn correction_persists_updates_and_can_be_deleted() {
+        let mut cache = LearningCache::new(LearningConfig::default());
+        for _ in 0..30 {
+            cache.record("あと、", "後、");
+        }
+        cache.prefer("あと、", "あと、");
+        assert_eq!(cache.lookup("あと、")[0].0, "あと、");
+        let file = tempfile::NamedTempFile::new().unwrap();
+        cache.save(file.path()).unwrap();
+        let mut restored = LearningCache::load(file.path(), LearningConfig::default()).unwrap();
+        assert_eq!(restored.preferred("あと、"), Some("あと、"));
+        restored.record("あと、", "後、");
+        assert_eq!(restored.preferred("あと、"), Some("あと、"));
+        restored.prefer("あと、", "後、");
+        assert_eq!(restored.lookup("あと、")[0].0, "後、");
+        assert_eq!(restored.preferred("あとで"), None);
+        restored.remove_suggestion("あと、", "後、");
+        assert_eq!(restored.preferred("あと、"), None);
+    }
 
     #[test]
     fn test_record_and_lookup() {
