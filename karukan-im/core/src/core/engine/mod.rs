@@ -158,6 +158,8 @@ pub struct InputMethodEngine {
     dicts: Dictionaries,
     /// Learning cache (user conversion history)
     learning: Option<LearningCache>,
+    /// Reading restored by Escape, pending confirmation without editing.
+    reverted_reading: Option<String>,
     /// Receiver for the background model-loading thread: model resolution
     /// can block on the network, so it never runs on the key-event thread.
     /// Drained by `poll_loaded_models` at the top of `process_key`; until
@@ -190,6 +192,7 @@ impl InputMethodEngine {
             shown_suggestions: CandidateList::default(),
             dicts: Dictionaries::default(),
             learning: None,
+            reverted_reading: None,
             model_loading: None,
         }
     }
@@ -281,6 +284,7 @@ impl InputMethodEngine {
     /// Every path that ends (or freshly starts) a composition goes through
     /// here, so a new composition-scoped field is a one-line change.
     pub(super) fn clear_composition(&mut self) {
+        self.reverted_reading = None;
         self.input_buf.clear();
         self.live.shown = false;
         self.chunks.clear();
@@ -339,7 +343,10 @@ impl InputMethodEngine {
         } else {
             None
         };
-        self.finish_conversion(&text, &reading);
+        if let Some(reading) = &reading {
+            self.record_preference(reading, &text);
+        }
+        self.end_composition();
 
         EngineResult::consumed()
             .with_action(EngineAction::Commit(text))
@@ -691,7 +698,7 @@ impl InputMethodEngine {
             InputState::Empty => String::new(),
             InputState::Composing { .. } => {
                 let (reading, text) = self.resolve_composing_commit();
-                self.record_learning(&reading, &text);
+                self.record_composing_learning(&reading, &text);
                 self.end_composition();
                 text
             }

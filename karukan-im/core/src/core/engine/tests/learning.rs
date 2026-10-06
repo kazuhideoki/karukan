@@ -486,3 +486,102 @@ fn space_key_keeps_learning_in_composing() {
         texts,
     );
 }
+
+#[test]
+fn escape_correction_requires_commit_and_overrides_frequent_history() {
+    let mut engine = engine_with_learned("あと、", "後、");
+    for _ in 0..30 {
+        engine.learning.as_mut().unwrap().record("あと、", "後、");
+    }
+    for ch in "ato,".chars() {
+        engine.process_key(&press(ch));
+    }
+    engine.process_key(&press_key(Keysym::SPACE));
+    engine.process_key(&press_key(Keysym::ESCAPE));
+    assert_eq!(engine.learning.as_ref().unwrap().preferred("あと、"), None);
+    engine.process_key(&press_key(Keysym::RETURN));
+    assert_eq!(
+        engine.learning.as_ref().unwrap().preferred("あと、"),
+        Some("あと、")
+    );
+    assert_eq!(
+        engine.learning.as_ref().unwrap().lookup("あと、")[0].0,
+        "あと、"
+    );
+    engine.live.enabled = true;
+    seed_model_cache(&mut engine, "アト、", "", &["後、"]);
+    for ch in "ato,".chars() {
+        engine.process_key(&press(ch));
+    }
+    assert_eq!(engine.preedit().unwrap().text(), "あと、");
+    assert_eq!(engine.learning.as_ref().unwrap().preferred("あとで"), None);
+    engine.process_key(&press_key(Keysym::SPACE));
+    engine.process_key(&press_key(Keysym::DOWN));
+    let selected = engine.selected_conversion_info().unwrap().0;
+    assert_ne!(selected, "あと、");
+    engine.process_key(&press_key(Keysym::RETURN));
+    assert_eq!(
+        engine.learning.as_ref().unwrap().preferred("あと、"),
+        Some(selected.as_str())
+    );
+}
+
+#[test]
+fn escape_then_discard_or_edit_does_not_set_preference() {
+    for edit in [false, true] {
+        let mut engine = engine_with_learned("あと", "後");
+        for ch in "ato".chars() {
+            engine.process_key(&press(ch));
+        }
+        engine.process_key(&press_key(Keysym::SPACE));
+        engine.process_key(&press_key(Keysym::ESCAPE));
+        if edit {
+            engine.process_key(&press('a'));
+            engine.process_key(&press_key(Keysym::RETURN));
+        } else {
+            engine.process_key(&press_key(Keysym::ESCAPE));
+        }
+        assert_eq!(engine.learning.as_ref().unwrap().preferred("あと"), None);
+        assert_eq!(engine.learning.as_ref().unwrap().preferred("あとあ"), None);
+    }
+}
+
+#[test]
+fn live_escape_confirmation_learns_hiragana() {
+    let mut engine = engine_with_learned("あと", "後");
+    engine.live.enabled = true;
+    seed_model_cache(&mut engine, "アト", "", &["後"]);
+    for ch in "ato".chars() {
+        engine.process_key(&press(ch));
+    }
+    assert_eq!(engine.preedit().unwrap().text(), "後");
+    engine.process_key(&press_key(Keysym::ESCAPE));
+    assert_eq!(engine.preedit().unwrap().text(), "あと");
+    assert_eq!(engine.learning.as_ref().unwrap().preferred("あと"), None);
+    engine.process_key(&press_key(Keysym::RETURN));
+    assert_eq!(
+        engine.learning.as_ref().unwrap().preferred("あと"),
+        Some("あと")
+    );
+}
+
+#[test]
+fn focus_out_records_correction_but_not_unselected_conversion() {
+    let mut engine = engine_with_learned("あと", "後");
+    for ch in "ato".chars() {
+        engine.process_key(&press(ch));
+    }
+    engine.process_key(&press_key(Keysym::SPACE));
+    assert_eq!(engine.commit(), "後");
+    assert_eq!(engine.learning.as_ref().unwrap().preferred("あと"), None);
+    for ch in "ato".chars() {
+        engine.process_key(&press(ch));
+    }
+    engine.process_key(&press_key(Keysym::SPACE));
+    engine.process_key(&press_key(Keysym::ESCAPE));
+    assert_eq!(engine.commit(), "あと");
+    assert_eq!(
+        engine.learning.as_ref().unwrap().preferred("あと"),
+        Some("あと")
+    );
+}

@@ -679,7 +679,11 @@ impl InputMethodEngine {
                 self.refine_through_composing(key)
             }
             // Backspace cancels back to the composition, like Escape.
-            Keysym::BACKSPACE => self.cancel_conversion(),
+            Keysym::BACKSPACE => {
+                let result = self.cancel_conversion();
+                self.reverted_reading = None;
+                result
+            }
             // Caret keys drop back to editing, the same way a caret move
             // ends the live-conversion display while composing: the
             // conversion (and its source filter) dissolves and the raw
@@ -833,6 +837,14 @@ impl InputMethodEngine {
         }
     }
 
+    pub(super) fn record_preference(&mut self, reading: &str, surface: &str) {
+        if self.mode.current() != InputMode::Emoji
+            && let Some(cache) = &mut self.learning
+        {
+            cache.prefer(reading, surface);
+        }
+    }
+
     /// Record a selection in the learning cache. No-op in emoji mode — the
     /// buffer is a `:query`, not a kana reading, and would corrupt the
     /// kana-keyed cache.
@@ -849,7 +861,17 @@ impl InputMethodEngine {
     /// composition.
     pub(super) fn finish_conversion(&mut self, text: &str, reading: &Option<String>) {
         if let Some(reading) = reading {
-            self.record_learning(reading, text);
+            if matches!(
+                self.state,
+                InputState::Conversion {
+                    cursor_moved: true,
+                    ..
+                }
+            ) {
+                self.record_preference(reading, text);
+            } else {
+                self.record_learning(reading, text);
+            }
         }
         self.end_composition();
     }
@@ -975,6 +997,7 @@ impl InputMethodEngine {
                 .with_action(EngineAction::HideAuxText);
         }
 
+        self.reverted_reading = Some(self.input_buf.settled_reading(&self.converters.romaji));
         // The composition was left untouched when the conversion started:
         // just come back to it, pending romaji still live
         let preedit = self.set_composing_state();
