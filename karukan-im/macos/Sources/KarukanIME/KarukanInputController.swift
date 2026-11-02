@@ -19,6 +19,12 @@ class KarukanInputController: IMKInputController {
     /// keyboards without a JIS かな key (issue #33).
     private var rightCommandTap = RightCommandTapDetector()
 
+    private let diagnosticSession = UUID().uuidString
+    private var diagnosticSequence: UInt64 = 0
+    private var diagnosticActive = false
+    private var diagnosticClientBundle: String?
+    private var lastMarkedRangeProbe: TimeInterval = -.infinity
+
     // MARK: - Event handling
 
     override func recognizedEvents(_ sender: Any!) -> Int {
@@ -30,6 +36,15 @@ class KarukanInputController: IMKInputController {
     override func handle(_ event: NSEvent!, client sender: Any!) -> Bool {
         guard let event else { return false }
 
+        // 除外判定より先に記録する。⌘付きイベントが届いた場合と未到達を区別する。
+        if InputDiagnostics.shared.isEnabled {
+            diagnosticSequence &+= 1
+            InputDiagnosticEnvironmentMonitor.shared.received(event.type)
+            diagnose(
+                .eventReceived, client: sender as? (any IMKTextInput),
+                details: inputDiagnosticEventDetails(event))
+        }
+
         // Lone right-⌘ tap → hiragana, the US-layout stand-in for the JIS
         // かな key. Never consume flagsChanged: the system must keep an
         // accurate view of modifier state.
@@ -39,13 +54,20 @@ class KarukanInputController: IMKInputController {
                 flags: event.modifierFlags.intersection(.deviceIndependentFlagsMask)
             )
             if fired, let client = sender as? (any IMKTextInput) {
+                beginDiagnosticInput(client: client)
                 sendKanaToggle(client: client)
             }
             return false
         }
 
-        guard event.type == .keyDown else { return false }
-        guard let client = sender as? (any IMKTextInput) else { return false }
+        guard event.type == .keyDown else {
+            diagnose(.eventBypassed, details: InputDiagnosticDetails(bypassReason: .unsupportedEvent))
+            return false
+        }
+        guard let client = sender as? (any IMKTextInput) else {
+            diagnose(.missingClient)
+            return false
+        }
 
         // A real key press means any held right ⌘ is a shortcut modifier,
         // not a pending tap.
@@ -53,7 +75,14 @@ class KarukanInputController: IMKInputController {
 
         let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
         // Never swallow Command shortcuts.
-        if flags.contains(.command) { return false }
+        if flags.contains(.command) {
+            diagnose(
+                .eventBypassed, client: client,
+                details: InputDiagnosticDetails(bypassReason: .commandShortcut))
+            return false
+        }
+
+        beginDiagnosticInput(client: client)
 
         // JIS かな key (and Karabiner right-Command tap → かな): always
         // consume so the system doesn't process keyCode 104 after the engine
@@ -67,10 +96,18 @@ class KarukanInputController: IMKInputController {
         // after macOS switches to the English input source.
         if event.keyCode == KeyCodeMap.eisuKeyCode {
             flushComposition(client: client)
+            diagnose(
+                .eventBypassed, client: client,
+                details: InputDiagnosticDetails(bypassReason: .eisuSwitch))
             return false
         }
 
-        guard let key = KeyCodeMap.translate(event: event) else { return false }
+        guard let key = KeyCodeMap.translate(event: event) else {
+            diagnose(
+                .eventBypassed, client: client,
+                details: InputDiagnosticDetails(bypassReason: .untranslatedKey))
+            return false
+        }
 
         // Refresh the conversion context while no composition is active
         // (mirrors the fcitx5 addon, which captures surrounding text in the
@@ -86,8 +123,10 @@ class KarukanInputController: IMKInputController {
         guard let result = engineClient.processKeySync(key) else {
             // Engine busy or dead: let the key pass through rather than
             // freezing input.
+            diagnose(.engineUnavailable, client: client)
             return false
         }
+        diagnoseResult(result, client: client)
         apply(actions: result.actions, client: client)
         return result.consumed
     }
@@ -97,18 +136,31 @@ class KarukanInputController: IMKInputController {
     private func sendKanaToggle(client: any IMKTextInput) {
         let key = EngineKeyEvent(keysym: KeyCodeMap.superRKeysym, modifiers: KeyModifiers())
         if let result = engineClient.processKeySync(key) {
+            diagnoseResult(result, client: client)
             apply(actions: result.actions, client: client)
+        } else {
+            diagnose(.engineUnavailable, client: client)
         }
     }
 
     // MARK: - Lifecycle
 
     override func activateServer(_ sender: Any!) {
+        diagnosticActive = true
+        diagnosticClientBundle = nil
+        lastMarkedRangeProbe = -.infinity
+        if InputDiagnostics.shared.isEnabled, let client = sender as? (any IMKTextInput) {
+            diagnosticClientBundle = traceClientCall(.bundleIdentifier, client: client) {
+                client.bundleIdentifier()
+            }
+        }
+        diagnose(.activate, client: sender as? (any IMKTextInput))
         engineClient.reloadUserDictionaryIfChangedAsync()
         super.activateServer(sender)
     }
 
     override func deactivateServer(_ sender: Any!) {
+        diagnose(.deactivateBegin, client: sender as? (any IMKTextInput))
         // A right-⌘ press armed before a focus switch must not fire after
         // it (e.g. right-⌘-clicking another window).
         rightCommandTap.cancel()
@@ -121,9 +173,12 @@ class KarukanInputController: IMKInputController {
         }
         engineClient.saveLearningAsync()
         super.deactivateServer(sender)
+        diagnosticActive = false
+        diagnose(.deactivateEnd, client: sender as? (any IMKTextInput))
     }
 
     override func commitComposition(_ sender: Any!) {
+        diagnose(.commitComposition, client: sender as? (any IMKTextInput))
         if let client = sender as? (any IMKTextInput) {
             flushComposition(client: client)
         } else {
@@ -135,8 +190,10 @@ class KarukanInputController: IMKInputController {
     /// actions it emits (clear preedit, hide candidates/aux).
     private func flushComposition(client: any IMKTextInput) {
         if let result = engineClient.commitSync() {
+            diagnoseResult(result, client: client)
             apply(actions: result.actions, client: client)
         } else {
+            diagnose(.engineUnavailable, client: client)
             // Engine unavailable: still drop any stale candidate panel.
             Self.candidateWindow.hide()
         }
@@ -174,10 +231,24 @@ class KarukanInputController: IMKInputController {
                 // with an empty UpdatePreedit, so clear the flag here or the
                 // next keystroke would skip the surrounding-text refresh.
                 hasPreedit = false
-                client.insertText(text, replacementRange: NSRange(location: NSNotFound, length: 0))
+                traceClientCall(.insertText, client: client, textUTF16Length: text.utf16.count) {
+                    client.insertText(text, replacementRange: NSRange(location: NSNotFound, length: 0))
+                }
+                probeMarkedRange(client: client, force: true)
+                lastMarkedRangeProbe = -.infinity
 
             case .updatePreedit(let text, let caret, let attributes):
+                // commitComposition/deactivate can emit an empty preedit even
+                // when this client has never received one. Avoid that needless
+                // synchronous IPC during focus changes: client calls can
+                // reenter IMK and activate another controller before returning.
+                // A real cancellation still clears the previously sent preedit.
+                let hadPreedit = hasPreedit
                 hasPreedit = !text.isEmpty
+                if text.isEmpty && !hadPreedit {
+                    diagnose(.redundantPreeditClearSkipped, client: client)
+                    continue
+                }
                 setMarkedText(text: text, caret: caret, attributes: attributes, client: client)
 
             case .showCandidates(let candidates, let cursor, let page, let totalPages):
@@ -187,7 +258,9 @@ class KarukanInputController: IMKInputController {
                 var cursorRect: NSRect?
                 if !Self.candidateWindow.isVisible {
                     var lineHeightRect = NSRect.zero
-                    client.attributes(forCharacterIndex: 0, lineHeightRectangle: &lineHeightRect)
+                    _ = traceClientCall(.candidateAnchor, client: client) {
+                        client.attributes(forCharacterIndex: 0, lineHeightRectangle: &lineHeightRect)
+                    }
                     cursorRect = lineHeightRect
                 }
                 Self.candidateWindow.show(
@@ -205,6 +278,7 @@ class KarukanInputController: IMKInputController {
                 break  // applied above
             }
         }
+        diagnose(.actionsApplied, client: client)
     }
 
     /// Send the text left of the cursor to the engine as conversion
@@ -222,7 +296,7 @@ class KarukanInputController: IMKInputController {
         // text that is no longer left of the cursor. No context beats a
         // wrong one. selectedRange flakiness is per-keystroke in some
         // apps, so this also self-heals on the next successful capture.
-        let selected = client.selectedRange()
+        let selected = traceClientCall(.selectedRange, client: client) { client.selectedRange() }
         guard selected.location != NSNotFound, selected.location > 0 else {
             NSLog("KarukanIME: surrounding text cleared (no usable selection)")
             engineClient.setSurroundingTextAsync(text: "", cursorPos: 0)
@@ -236,7 +310,10 @@ class KarukanInputController: IMKInputController {
         // it's the IMKTextInput document-access method clients actually
         // implement (azooKey-Desktop settled on the same call).
         var actualRange = NSRange()
-        guard let leftContext = client.string(from: range, actualRange: &actualRange),
+        let leftContext = traceClientCall(.surroundingText, client: client) {
+            client.string(from: range, actualRange: &actualRange)
+        }
+        guard let leftContext,
             !leftContext.isEmpty
         else {
             NSLog("KarukanIME: surrounding text cleared (string(from:) unavailable)")
@@ -255,11 +332,14 @@ class KarukanInputController: IMKInputController {
         text: String, caret: Int, attributes: [PreeditAttr], client: any IMKTextInput
     ) {
         guard !text.isEmpty else {
-            client.setMarkedText(
-                NSAttributedString(string: ""),
-                selectionRange: NSRange(location: 0, length: 0),
-                replacementRange: NSRange(location: NSNotFound, length: 0)
-            )
+            traceClientCall(.setMarkedText, client: client, textUTF16Length: 0) {
+                client.setMarkedText(
+                    NSAttributedString(string: ""),
+                    selectionRange: NSRange(location: 0, length: 0),
+                    replacementRange: NSRange(location: NSNotFound, length: 0)
+                )
+            }
+            lastMarkedRangeProbe = -.infinity
             return
         }
 
@@ -283,11 +363,79 @@ class KarukanInputController: IMKInputController {
         }
 
         let caretUTF16 = utf16Offset(ofScalarOffset: caret, in: text)
-        client.setMarkedText(
-            attributed,
-            selectionRange: NSRange(location: caretUTF16, length: 0),
-            replacementRange: NSRange(location: NSNotFound, length: 0)
+        traceClientCall(.setMarkedText, client: client, textUTF16Length: text.utf16.count) {
+            client.setMarkedText(
+                attributed,
+                selectionRange: NSRange(location: caretUTF16, length: 0),
+                replacementRange: NSRange(location: NSNotFound, length: 0)
+            )
+        }
+        probeMarkedRange(client: client)
+    }
+
+    // MARK: - Input diagnostics
+
+    private func beginDiagnosticInput(client: any IMKTextInput) {
+        guard InputDiagnostics.shared.isEnabled else { return }
+        diagnose(.inputReceived, client: client)
+    }
+
+    private func diagnoseResult(_ result: KeyResult, client: any IMKTextInput) {
+        guard InputDiagnostics.shared.isEnabled else { return }
+        diagnose(
+            .engineResult, client: client,
+            details: InputDiagnosticDetails(
+                consumed: result.consumed, actions: result.actions.map(InputDiagnosticAction.init)))
+    }
+
+    private func diagnose(
+        _ event: InputDiagnosticEvent, client: (any IMKTextInput)? = nil,
+        details: InputDiagnosticDetails = InputDiagnosticDetails()
+    ) {
+        guard InputDiagnostics.shared.isEnabled else { return }
+        let frontmost = NSWorkspace.shared.frontmostApplication
+        let context = InputDiagnosticContext(
+            session: diagnosticSession, sequence: diagnosticSequence, active: diagnosticActive,
+            client: client.map { String(describing: ObjectIdentifier($0 as AnyObject)) },
+            clientBundle: diagnosticClientBundle,
+            frontmostBundle: frontmost?.bundleIdentifier, frontmostPID: frontmost?.processIdentifier,
+            hasPreedit: hasPreedit, candidatesVisible: Self.candidateWindow.isVisible
         )
+        InputDiagnostics.shared.record(event, context: context, details: details)
+    }
+
+    @discardableResult
+    private func traceClientCall<T>(
+        _ call: InputDiagnosticCall, client: any IMKTextInput, textUTF16Length: Int? = nil,
+        body: () -> T
+    ) -> T {
+        guard InputDiagnostics.shared.isEnabled else { return body() }
+        diagnose(
+            .clientCallBegin, client: client,
+            details: InputDiagnosticDetails(call: call, textUTF16Length: textUTF16Length))
+        let start = ProcessInfo.processInfo.systemUptime
+        let result = body()
+        diagnose(
+            .clientCallEnd, client: client,
+            details: InputDiagnosticDetails(
+                call: call, elapsedMs: (ProcessInfo.processInfo.systemUptime - start) * 1000,
+                textUTF16Length: textUTF16Length))
+        return result
+    }
+
+    private func probeMarkedRange(client: any IMKTextInput, force: Bool = false) {
+        guard InputDiagnostics.shared.isEnabled else { return }
+        let now = ProcessInfo.processInfo.systemUptime
+        // 入力先への追加IPCは未確定文字の先頭と以後最大1秒に1回、確定直後に限る。
+        guard force || now - lastMarkedRangeProbe >= 1 else { return }
+        lastMarkedRangeProbe = now
+        diagnose(.clientCallBegin, client: client, details: InputDiagnosticDetails(call: .markedRange))
+        let range = client.markedRange()
+        var details = InputDiagnosticDetails.range(range)
+        details.call = .markedRange
+        details.elapsedMs = (ProcessInfo.processInfo.systemUptime - now) * 1000
+        // NSNotFoundは未対応のアプリでも返るので、入力失敗とは判定しない。
+        diagnose(.clientCallEnd, client: client, details: details)
     }
 }
 

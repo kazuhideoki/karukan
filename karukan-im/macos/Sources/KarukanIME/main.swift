@@ -58,6 +58,8 @@ private func connectionName() -> String {
 setupLogging()
 setupApplicationMenu()
 NSLog("KarukanIME: starting")
+InputDiagnostics.shared.record(.startup)
+InputDiagnosticEnvironmentMonitor.shared.start()
 
 guard
     let server = IMKServer(name: connectionName(), bundleIdentifier: Bundle.main.bundleIdentifier)
