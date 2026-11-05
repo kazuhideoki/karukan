@@ -100,8 +100,8 @@ guard let source = CGEventSource(stateID: .hidSystemState),
     fail("Could not construct diagnostic key events")
 }
 // Check again immediately before posting; never redirect text to another app.
-guard NSWorkspace.shared.frontmostApplication?.bundleIdentifier == targetID else {
-    fail("Refused: focus changed before posting")
+guard NSWorkspace.shared.frontmostApplication?.bundleIdentifier == targetID, testWindowHasFocus() else {
+    fail("Refused: dedicated text field lost focus before posting")
 }
 down.flags = arguments[1] == "raycastHotkey" ? .maskCommand : []
 up.flags = []
