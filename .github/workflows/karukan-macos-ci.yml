@@ -66,3 +66,6 @@ jobs:
 
       - name: Build diagnostic text client and guarded key driver
         run: bash karukan-im/macos/Diagnostics/ConnectionProbe/build.sh
+
+      - name: Verify diagnostic driver failure artifacts
+        run: python3 -m unittest discover -s karukan-im/macos/Diagnostics/ConnectionProbe -p 'test_*.py'

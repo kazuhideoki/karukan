@@ -3,9 +3,19 @@ import Cocoa
 import CoreGraphics
 
 // Diagnostic driver, to be executed only after explicit user authorization.
-// Source selection is performed separately, via the probe's visible controls.
+// Source selection is performed by a separate selector or visible controls.
 // This process cannot type into Slack, ChatGPT, or any other application.
-let targetID = "dev.kazuhideoki.KarukanConnectionProbe"
+let appURL = URL(fileURLWithPath: CommandLine.arguments[0]).deletingLastPathComponent()
+    .appendingPathComponent("Karukan Connection Probe.app").resolvingSymlinksInPath()
+guard let ownBundle = Bundle(url: appURL), let targetID = ownBundle.bundleIdentifier,
+    targetID.hasPrefix("dev.kazuhideoki.KarukanConnectionProbe.h"),
+    ownBundle.object(forInfoDictionaryKey: "CFBundleExecutable") as? String == "KarukanConnectionProbe"
+else { fail("Refused: expected disposable probe bundle is missing") }
+
+func probeIsFrontmost() -> Bool {
+    guard let app = NSWorkspace.shared.frontmostApplication else { return false }
+    return app.bundleIdentifier == targetID && app.bundleURL?.resolvingSymlinksInPath() == appURL
+}
 let arguments = Array(CommandLine.arguments.dropFirst())
 let logURL = URL(fileURLWithPath: CommandLine.arguments[0]).deletingLastPathComponent()
     .appendingPathComponent("client-events.jsonl")
@@ -26,8 +36,6 @@ func fail(_ message: String) -> Never {
 }
 
 if arguments == ["activate"] {
-    let appURL = URL(fileURLWithPath: CommandLine.arguments[0]).deletingLastPathComponent()
-        .appendingPathComponent("Karukan Connection Probe.app")
     let config = NSWorkspace.OpenConfiguration()
     config.activates = true
     var complete = false
@@ -47,11 +55,11 @@ if arguments == ["activate"] {
     if let error { fail("Activation failed: \(error.localizedDescription)") }
     let readyDeadline = Date().addingTimeInterval(3)
     while Date() < readyDeadline
-        && (NSWorkspace.shared.frontmostApplication?.bundleIdentifier != targetID || !testWindowHasFocus())
+        && (!probeIsFrontmost() || !testWindowHasFocus())
     {
         RunLoop.main.run(until: Date().addingTimeInterval(0.02))
     }
-    guard NSWorkspace.shared.frontmostApplication?.bundleIdentifier == targetID, testWindowHasFocus() else {
+    guard probeIsFrontmost(), testWindowHasFocus() else {
         fail("Test app did not obtain focus; no keys will be sent")
     }
     print("Requested activation of the disposable test app")
@@ -59,7 +67,7 @@ if arguments == ["activate"] {
 }
 
 if arguments == ["check"] {
-    guard NSWorkspace.shared.frontmostApplication?.bundleIdentifier == targetID, testWindowHasFocus() else {
+    guard probeIsFrontmost(), testWindowHasFocus() else {
         fail("Refused: dedicated disposable text field does not have focus")
     }
     guard let source = TISCopyCurrentKeyboardInputSource()?.takeRetainedValue(),
@@ -76,7 +84,7 @@ guard (2...3).contains(arguments.count), arguments[0] == "key" else {
         "Usage: PhysicalKeyProbe activate | check | key {k,a,return,eisu,kana,escape,raycastHotkey} [hid|session|annotated|pid]"
     )
 }
-let delivery = arguments.count == 3 ? arguments[2] : "hid"
+let delivery = arguments.count == 3 ? arguments[2] : (arguments[1] == "raycastHotkey" ? "hid" : "pid")
 guard ["hid", "session", "annotated", "pid"].contains(delivery) else { fail("Unknown delivery boundary") }
 let keys: [String: CGKeyCode] = [
     "k": 40, "a": 0, "return": 36, "eisu": 102, "kana": 104, "escape": 53, "raycastHotkey": 49,
@@ -85,7 +93,7 @@ guard let code = keys[arguments[1]] else { fail("Only the fixed diagnostic key s
 guard CGPreflightPostEventAccess() else {
     fail("No existing event-posting permission; this program will not request or change permissions")
 }
-guard NSWorkspace.shared.frontmostApplication?.bundleIdentifier == targetID else {
+guard probeIsFrontmost() else {
     fail("Refused: disposable test app is not the frontmost application")
 }
 guard testWindowHasFocus() else {
@@ -93,7 +101,7 @@ guard testWindowHasFocus() else {
 }
 let deadline = Date().addingTimeInterval(2)
 while Date() < deadline,
-    NSWorkspace.shared.frontmostApplication?.bundleIdentifier == targetID,
+    probeIsFrontmost(),
     !CGEventSource.flagsState(.combinedSessionState).intersection([
         .maskCommand, .maskControl, .maskAlternate, .maskShift,
     ]).isEmpty
@@ -112,7 +120,7 @@ else {
 }
 // Check again immediately before posting; never redirect text to another app.
 guard let target = NSWorkspace.shared.frontmostApplication,
-    target.bundleIdentifier == targetID, testWindowHasFocus()
+    target.bundleIdentifier == targetID, target.bundleURL?.resolvingSymlinksInPath() == appURL, testWindowHasFocus()
 else {
     fail("Refused: dedicated text field lost focus before posting")
 }

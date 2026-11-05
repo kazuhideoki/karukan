@@ -88,6 +88,7 @@ final class ProbeApplication: NSApplication {
         record("sendEventEnd", extra: eventMetadata(event))
         dispatchStack.removeLast()
         if event.type == .keyUp, event.keyCode == 36 { probeDelegate?.finishTrialAfterReturn() }
+        if event.type == .keyUp, event.keyCode == 0 { probeDelegate?.finishPrimeAfterLetter() }
     }
 }
 
@@ -112,8 +113,11 @@ final class ProbeDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     var automatedCases: [String] = []
     var automatedIndex = 0
     var awaitingReturn = false
+    var awaitingPrime = false
+    var awaitingSource = false
     var trialTimeout: DispatchWorkItem?
     var comparisonGeneration = 0
+    var startRequested = false
     let textView = ProbeTextView(frame: NSRect(x: 0, y: 0, width: 1000, height: 220))
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -140,6 +144,10 @@ final class ProbeDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 ("Overlay: restore after focus", #selector(overlayAfter)),
             ],
             [("Run 20 comparisons (about 45 seconds)", #selector(runComparison))],
+            [
+                ("Run 20 ABC-primed switches", #selector(runPrimedComparison)),
+                ("Preflight (no keys)", #selector(preflight)),
+            ],
         ] {
             let buttons = NSStackView()
             for (label, action) in controls {
@@ -196,6 +204,10 @@ final class ProbeDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             if source != sampledSource {
                 sampledSource = source
                 record("sourceSnapshot")
+            }
+            if self.awaitingSource, source == "dev.togatoga.inputmethod.Karukan.Japanese" {
+                self.awaitingSource = false
+                self.readyForTrial("primed")
             }
         }
         DistributedNotificationCenter.default().addObserver(
@@ -281,13 +293,48 @@ final class ProbeDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     @objc func runComparison() {
+        requestComparison([
+            "baseline", "keep", "before", "after", "rapid",
+            "baseline", "rapid", "after", "before", "keep",
+            "baseline", "keep", "before", "after", "rapid",
+            "baseline", "rapid", "after", "before", "keep",
+        ])
+    }
+
+    @objc func runPrimedComparison() { requestComparison(Array(repeating: "primed", count: 20)) }
+
+    @objc func preflight() { requestComparison([], preflightOnly: true) }
+
+    func requestComparison(_ cases: [String], preflightOnly: Bool = false) {
+        guard automatedCases.isEmpty, !startRequested else { return }
+        startRequested = true
+        record("comparisonRequested", extra: ["preflightOnly": preflightOnly])
+        // AXPress can invoke a button in a background window. Request focus
+        // once in response to that explicit button action, then check it after
+        // the action has returned. Never keep reactivating against user input.
+        window.makeKeyAndOrderFront(nil)
+        window.makeFirstResponder(textView)
+        NSApp.activate(ignoringOtherApps: true)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
+            guard let self else { return }
+            self.startRequested = false
+            guard NSApp.isActive, self.window.isKeyWindow, self.window.firstResponder === self.textView else {
+                record("comparisonStartRejected")
+                statusLabel.stringValue = "Test field did not obtain focus — no keys requested"
+                return
+            }
+            if preflightOnly {
+                record("preflightReady")
+                statusLabel.stringValue = "Preflight ready — no keys sent and no source selected"
+            } else {
+                self.startComparison(cases)
+            }
+        }
+    }
+
+    func startComparison(_ cases: [String]) {
         guard automatedCases.isEmpty, NSApp.isActive, window.isKeyWindow else { return }
-        automatedCases = [
-            "baseline", "keep", "before", "after", "rapid",
-            "baseline", "rapid", "after", "before", "keep",
-            "baseline", "keep", "before", "after", "rapid",
-            "baseline", "rapid", "after", "before", "keep",
-        ]
+        automatedCases = cases
         automatedIndex = 0
         comparisonGeneration += 1
         record("comparisonBegin")
@@ -319,6 +366,12 @@ final class ProbeDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 self.abortComparison()
                 return
             }
+            if mode == "primed" {
+                self.awaitingPrime = true
+                record("trialPrimeReady", extra: ["condition": mode, "caseIndex": self.automatedIndex])
+                self.setTrialTimeout()
+                return
+            }
             self.selectSource("dev.togatoga.inputmethod.Karukan.Japanese")
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
                 guard self.comparisonGeneration == generation else { return }
@@ -348,9 +401,30 @@ final class ProbeDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         awaitingReturn = true
         record("trialReady", extra: ["condition": condition, "caseIndex": automatedIndex])
         statusLabel.stringValue = "Comparison \(automatedIndex + 1)/20 — \(condition)"
+        setTrialTimeout()
+    }
+
+    func setTrialTimeout() {
+        trialTimeout?.cancel()
         let timeout = DispatchWorkItem { [weak self] in self?.abortComparison() }
         trialTimeout = timeout
         DispatchQueue.main.asyncAfter(deadline: .now() + 4, execute: timeout)
+    }
+
+    func finishPrimeAfterLetter() {
+        guard awaitingPrime else { return }
+        awaitingPrime = false
+        trialTimeout?.cancel()
+        let valid = textView.string == "a" && !textView.hasMarkedText()
+        record("trialPrimeObserved", extra: ["matchesLatinA": valid])
+        guard valid else {
+            abortComparison()
+            return
+        }
+        textView.string = ""
+        awaitingSource = true
+        record("trialSourceSelectionRequested", extra: ["caseIndex": automatedIndex])
+        setTrialTimeout()
     }
 
     func finishTrialAfterReturn() {
@@ -358,6 +432,12 @@ final class ProbeDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         awaitingReturn = false
         trialTimeout?.cancel()
         record("trialResult", extra: ["condition": automatedCases[automatedIndex], "caseIndex": automatedIndex])
+        if textView.string != "か" || textView.hasMarkedText() {
+            automatedCases = []
+            record("comparisonSuspendedOnFailure")
+            statusLabel.stringValue = "Unexpected result preserved — no more test input"
+            return
+        }
         automatedIndex += 1
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in self?.nextAutomatedTrial() }
     }
@@ -366,6 +446,8 @@ final class ProbeDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         comparisonGeneration += 1
         trialTimeout?.cancel()
         awaitingReturn = false
+        awaitingPrime = false
+        awaitingSource = false
         automatedCases = []
         overlay?.orderOut(nil)
         overlay = nil
