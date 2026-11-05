@@ -18,7 +18,6 @@ def run(root, delivery_cycle, arm_timeout=20, run_timeout=90):
     deliveries, handled, results = {}, set(), []
     start = time.time() * 1000
     deadline = time.monotonic() + arm_timeout
-    offset = log.stat().st_size
     status, error, active_run = "waitingForStart", None, None
     output_path = root / "comparison-results.json"
 
@@ -40,6 +39,7 @@ def run(root, delivery_cycle, arm_timeout=20, run_timeout=90):
 
     save()  # A failed new run must never leave a previous success artifact.
     try:
+        offset = log.stat().st_size
         with log.open() as source:
             source.seek(offset)
             while time.monotonic() < deadline:

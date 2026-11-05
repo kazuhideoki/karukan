@@ -11,6 +11,20 @@ import run_comparison
 
 
 class ComparisonArtifactTests(unittest.TestCase):
+    def test_missing_log_replaces_previous_success_without_posting(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            output = root / "comparison-results.json"
+            output.write_text('{"status":"comparisonCompleted","results":["stale"]}')
+            with mock.patch.object(run_comparison.subprocess, "run") as send, contextlib.redirect_stdout(io.StringIO()):
+                code = run_comparison.run(root, ["pid"])
+            self.assertEqual(code, 2)
+            result = json.loads(output.read_text())
+            self.assertEqual(result["status"], "driverError")
+            self.assertEqual(result["results"], [])
+            self.assertTrue(result["error"])
+            send.assert_not_called()
+
     def test_timeout_replaces_previous_success_without_posting(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = pathlib.Path(temporary)
