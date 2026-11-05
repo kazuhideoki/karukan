@@ -26,7 +26,7 @@ SOURCE_TIMINGS = {
 RECOVERY_PHASES = ["unchanged", "after-context-snapshot", "after-context-reconnect"]
 
 
-def run(root, delivery_cycle, arm_timeout=20, run_timeout=90):
+def run(root, delivery_cycle, arm_timeout=20, run_timeout=180):
     log = root / "client-events.jsonl"
     driver = root / "PhysicalKeyProbe"
     deliveries, handled, results = {}, set(), []
