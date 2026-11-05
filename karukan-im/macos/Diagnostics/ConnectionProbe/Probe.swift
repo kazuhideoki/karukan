@@ -256,6 +256,7 @@ final class ProbeDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     func showOverlay(order: String, completion: (() -> Void)? = nil) {
         guard overlay == nil else { return }
+        let generation = comparisonGeneration
         record("overlayBegin", extra: ["restoreOrder": order])
         let panel = NSPanel(
             contentRect: NSRect(x: window.frame.midX - 220, y: window.frame.midY, width: 440, height: 120),
@@ -270,13 +271,14 @@ final class ProbeDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         if order != "keep" { selectSource("com.apple.keylayout.ABC") }
         // A bounded local reproduction; no other application receives keys.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
-            guard let self else { return }
+            guard let self, self.comparisonGeneration == generation else { return }
             guard NSApp.isActive else {
                 self.abortComparison()
                 return
             }
             if order == "before" { self.selectSource("dev.togatoga.inputmethod.Karukan.Japanese") }
             DispatchQueue.main.asyncAfter(deadline: .now() + (order == "before" ? 0.05 : 0)) {
+                guard self.comparisonGeneration == generation else { return }
                 guard NSApp.isActive else {
                     self.abortComparison()
                     return
@@ -439,7 +441,11 @@ final class ProbeDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             return
         }
         automatedIndex += 1
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in self?.nextAutomatedTrial() }
+        let generation = comparisonGeneration
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
+            guard let self, self.comparisonGeneration == generation else { return }
+            self.nextAutomatedTrial()
+        }
     }
 
     func abortComparison() {

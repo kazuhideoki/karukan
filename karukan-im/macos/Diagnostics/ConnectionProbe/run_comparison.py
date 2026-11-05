@@ -81,6 +81,8 @@ def run(root, delivery_cycle, arm_timeout=20, run_timeout=90):
                     break
             else:
                 status = "driverTimedOut"
+    except KeyboardInterrupt:
+        status = "driverInterrupted"
     except Exception as problem:
         status = "driverError"
         error = str(problem)
