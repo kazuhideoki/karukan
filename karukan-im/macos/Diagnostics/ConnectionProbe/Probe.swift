@@ -12,6 +12,7 @@ var trial = 0
 var sampledSource: String?
 var dispatchSequence = 0
 var dispatchStack: [Int] = []
+var markedWriteCount = 0
 weak var observedView: NSTextView?
 var primaryWindow: NSWindow?
 weak var probeDelegate: ProbeDelegate?
@@ -95,6 +96,7 @@ final class ProbeApplication: NSApplication {
 // Deliberately no keyDown override and no custom NSTextInputContext.
 final class ProbeTextView: NSTextView {
     override func setMarkedText(_ string: Any, selectedRange: NSRange, replacementRange: NSRange) {
+        markedWriteCount += 1
         record("setMarkedTextBegin")
         super.setMarkedText(string, selectedRange: selectedRange, replacementRange: replacementRange)
         record("setMarkedTextEnd")
@@ -118,6 +120,11 @@ final class ProbeDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     var trialTimeout: DispatchWorkItem?
     var comparisonGeneration = 0
     var startRequested = false
+    var compareRecovery = false
+    var recoveryPhase: Int?
+    var recoveryStartLength = 0
+    var recoveryStartMarkedWrites = 0
+    let recoveryNames = ["unchanged", "after-context-snapshot", "after-context-reconnect"]
     let textView = ProbeTextView(frame: NSRect(x: 0, y: 0, width: 1000, height: 220))
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -148,6 +155,8 @@ final class ProbeDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 ("Run 20 ABC-primed switches", #selector(runPrimedComparison)),
                 ("Preflight (no keys)", #selector(preflight)),
             ],
+            [("Run 36 source-order comparisons", #selector(runSourceComparison))],
+            [("Run 24 Karukan / Apple comparisons", #selector(runIMEComparison))],
         ] {
             let buttons = NSStackView()
             for (label, action) in controls {
@@ -205,9 +214,14 @@ final class ProbeDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 sampledSource = source
                 record("sourceSnapshot")
             }
-            if self.awaitingSource, source == "dev.togatoga.inputmethod.Karukan.Japanese" {
+            let expected =
+                self.automatedCases.indices.contains(self.automatedIndex)
+                    && self.automatedCases[self.automatedIndex].hasPrefix("apple-primed")
+                ? "com.apple.inputmethod.Kotoeri.RomajiTyping.Japanese"
+                : "dev.togatoga.inputmethod.Karukan.Japanese"
+            if self.awaitingSource, source == expected {
                 self.awaitingSource = false
-                self.readyForTrial("primed")
+                self.readyForTrial(self.automatedCases[self.automatedIndex])
             }
         }
         DistributedNotificationCenter.default().addObserver(
@@ -305,9 +319,28 @@ final class ProbeDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     @objc func runPrimedComparison() { requestComparison(Array(repeating: "primed", count: 20)) }
 
+    @objc func runIMEComparison() {
+        requestComparison(
+            Array(
+                repeating: ["primed", "apple-primed", "primed-selector-alive", "apple-primed-alive"], count: 6
+            ).flatMap { $0 }, withRecovery: true)
+    }
+
+    @objc func runSourceComparison() {
+        let conditions = [
+            "primed", "primed-post-delay", "primed-selector-hold",
+            "primed-selector-pump", "primed-pre-delay", "primed-in-process",
+        ]
+        // Rotate order so each condition occupies every position in one block.
+        let cases = (0..<conditions.count).flatMap { offset in
+            Array(conditions[offset...] + conditions[..<offset])
+        }
+        requestComparison(cases, withRecovery: true)
+    }
+
     @objc func preflight() { requestComparison([], preflightOnly: true) }
 
-    func requestComparison(_ cases: [String], preflightOnly: Bool = false) {
+    func requestComparison(_ cases: [String], preflightOnly: Bool = false, withRecovery: Bool = false) {
         guard automatedCases.isEmpty, !startRequested else { return }
         startRequested = true
         record("comparisonRequested", extra: ["preflightOnly": preflightOnly])
@@ -329,6 +362,7 @@ final class ProbeDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 record("preflightReady")
                 statusLabel.stringValue = "Preflight ready — no keys sent and no source selected"
             } else {
+                self.compareRecovery = withRecovery
                 self.startComparison(cases)
             }
         }
@@ -350,9 +384,14 @@ final class ProbeDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             return
         }
         guard automatedIndex < automatedCases.count else {
+            // The Apple condition only uses an already-enabled input source.
+            // Restore Karukan while this disposable field still owns focus.
+            if automatedCases.contains(where: { $0.hasPrefix("apple-primed") }) {
+                selectSource("dev.togatoga.inputmethod.Karukan.Japanese")
+            }
             automatedCases = []
             record("comparisonCompleted")
-            statusLabel.stringValue = "20 comparisons completed — keyboard and mouse are free"
+            statusLabel.stringValue = "Comparisons completed — keyboard and mouse are free"
             return
         }
         reset()
@@ -368,7 +407,7 @@ final class ProbeDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 self.abortComparison()
                 return
             }
-            if mode == "primed" {
+            if mode.hasPrefix("primed") || mode.hasPrefix("apple-primed") {
                 self.awaitingPrime = true
                 record("trialPrimeReady", extra: ["condition": mode, "caseIndex": self.automatedIndex])
                 self.setTrialTimeout()
@@ -402,7 +441,7 @@ final class ProbeDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
         awaitingReturn = true
         record("trialReady", extra: ["condition": condition, "caseIndex": automatedIndex])
-        statusLabel.stringValue = "Comparison \(automatedIndex + 1)/20 — \(condition)"
+        statusLabel.stringValue = "Comparison \(automatedIndex + 1)/\(automatedCases.count) — \(condition)"
         setTrialTimeout()
     }
 
@@ -425,7 +464,11 @@ final class ProbeDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
         textView.string = ""
         awaitingSource = true
-        record("trialSourceSelectionRequested", extra: ["caseIndex": automatedIndex])
+        let condition = automatedCases[automatedIndex]
+        record("trialSourceSelectionRequested", extra: ["condition": condition, "caseIndex": automatedIndex])
+        if condition == "primed-in-process" {
+            selectSource("dev.togatoga.inputmethod.Karukan.Japanese")
+        }
         setTrialTimeout()
     }
 
@@ -433,18 +476,91 @@ final class ProbeDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         guard awaitingReturn, automatedCases.indices.contains(automatedIndex) else { return }
         awaitingReturn = false
         trialTimeout?.cancel()
-        record("trialResult", extra: ["condition": automatedCases[automatedIndex], "caseIndex": automatedIndex])
-        if textView.string != "か" || textView.hasMarkedText() {
-            automatedCases = []
-            record("comparisonSuspendedOnFailure")
-            statusLabel.stringValue = "Unexpected result preserved — no more test input"
+        if recoveryPhase != nil {
+            finishRecoveryAfterReturn()
             return
         }
+        record("trialResult", extra: ["condition": automatedCases[automatedIndex], "caseIndex": automatedIndex])
+        if textView.string != "か" || textView.hasMarkedText() {
+            if compareRecovery {
+                beginRecovery(0)
+            } else {
+                suspendOnFailure()
+            }
+            return
+        }
+        advanceTrial()
+    }
+
+    func advanceTrial() {
         automatedIndex += 1
         let generation = comparisonGeneration
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
             guard let self, self.comparisonGeneration == generation else { return }
             self.nextAutomatedTrial()
+        }
+    }
+
+    func suspendOnFailure() {
+        recoveryPhase = nil
+        automatedCases = []
+        record("comparisonSuspendedOnFailure")
+        statusLabel.stringValue = "Unexpected result preserved — no more test input"
+    }
+
+    func beginRecovery(_ phase: Int) {
+        guard NSApp.isActive, window.isKeyWindow, window.firstResponder === textView else {
+            abortComparison()
+            return
+        }
+        recoveryPhase = phase
+        record("recoveryBegin", extra: ["phase": recoveryNames[phase], "caseIndex": automatedIndex])
+        if phase == 1 {
+            // Getters are deliberately excluded from the unchanged control.
+            // Their observer effect is tested before explicit reconnection.
+            let context = textView.inputContext
+            var fields: [String: Any] = ["exists": context != nil]
+            if let context {
+                fields["context"] = String(describing: ObjectIdentifier(context))
+                fields["selectedSource"] = context.selectedKeyboardInputSource
+                fields["allowedLocales"] = context.allowedInputSourceLocales
+            }
+            record("recoveryContextSnapshot", extra: fields)
+        } else if phase == 2 {
+            record("recoveryReconnectBegin")
+            let context = textView.inputContext
+            context?.deactivate()
+            context?.activate()
+            record("recoveryReconnectEnd")
+        }
+        recoveryStartLength = textView.string.utf16.count
+        recoveryStartMarkedWrites = markedWriteCount
+        awaitingReturn = true
+        record("recoveryReady", extra: ["phase": recoveryNames[phase], "caseIndex": automatedIndex])
+        setTrialTimeout()
+    }
+
+    func finishRecoveryAfterReturn() {
+        guard let phase = recoveryPhase else { return }
+        let body = textView.string as NSString
+        let suffix = body.length >= recoveryStartLength ? body.substring(from: recoveryStartLength) : ""
+        let recovered = suffix == "か" && !textView.hasMarkedText()
+        record(
+            "recoveryResult",
+            extra: [
+                "phase": recoveryNames[phase], "caseIndex": automatedIndex,
+                "lengthDelta": body.length - recoveryStartLength,
+                "markedWrites": markedWriteCount - recoveryStartMarkedWrites, "committedKa": recovered,
+            ])
+        let generation = comparisonGeneration
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
+            guard let self, self.comparisonGeneration == generation else { return }
+            if phase + 1 < self.recoveryNames.count {
+                self.beginRecovery(phase + 1)
+            } else {
+                self.recoveryPhase = nil
+                if recovered { self.advanceTrial() } else { self.suspendOnFailure() }
+            }
         }
     }
 
@@ -454,6 +570,7 @@ final class ProbeDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         awaitingReturn = false
         awaitingPrime = false
         awaitingSource = false
+        recoveryPhase = nil
         automatedCases = []
         overlay?.orderOut(nil)
         overlay = nil

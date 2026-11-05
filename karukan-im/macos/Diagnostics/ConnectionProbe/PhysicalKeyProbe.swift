@@ -35,9 +35,15 @@ func fail(_ message: String) -> Never {
     exit(2)
 }
 
-if arguments == ["activate"] {
+if arguments == ["activate"] || arguments == ["activate-untraced"] {
     let config = NSWorkspace.OpenConfiguration()
     config.activates = true
+    if arguments == ["activate-untraced"] {
+        guard NSRunningApplication.runningApplications(withBundleIdentifier: targetID).isEmpty else {
+            fail("Close the existing probe before selecting an untraced launch")
+        }
+        config.arguments = ["--no-context-trace"]
+    }
     var complete = false
     var error: Error?
     NSWorkspace.shared.openApplication(at: appURL, configuration: config) { app, problem in
@@ -81,7 +87,7 @@ if arguments == ["check"] {
 
 guard (2...3).contains(arguments.count), arguments[0] == "key" else {
     fail(
-        "Usage: PhysicalKeyProbe activate | check | key {k,a,return,eisu,kana,escape,raycastHotkey} [hid|session|annotated|pid]"
+        "Usage: PhysicalKeyProbe activate | activate-untraced | check | key {k,a,return,eisu,kana,escape,raycastHotkey} [hid|session|annotated|pid]"
     )
 }
 let delivery = arguments.count == 3 ? arguments[2] : (arguments[1] == "raycastHotkey" ? "hid" : "pid")

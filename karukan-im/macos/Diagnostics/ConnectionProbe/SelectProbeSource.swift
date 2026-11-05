@@ -24,19 +24,48 @@ func disposableFieldHasFocus() -> Bool {
         && row["firstResponderIsTextView"] as? Bool == true
         && (row["pid"] as? Int32) == NSWorkspace.shared.frontmostApplication?.processIdentifier
 }
-guard CommandLine.arguments.count == 2,
-    let id = ["ABC": "com.apple.keylayout.ABC", "Karukan": "dev.togatoga.inputmethod.Karukan.Japanese"][
-        CommandLine.arguments[1]],
+let arguments = Array(CommandLine.arguments.dropFirst())
+let timing = arguments.count == 2 ? arguments[1] : "immediate"
+guard (1...2).contains(arguments.count),
+    ["immediate", "settle-before", "hold-after", "pump-after", "stay-alive"].contains(timing),
+    let id = [
+        "ABC": "com.apple.keylayout.ABC", "Karukan": "dev.togatoga.inputmethod.Karukan.Japanese",
+        "AppleJapanese": "com.apple.inputmethod.Kotoeri.RomajiTyping.Japanese",
+    ][
+        arguments[0]],
     probeIsFrontmost(), disposableFieldHasFocus()
 else {
     fputs("Refused: unknown source or disposable test app is not frontmost\n", stderr)
     exit(2)
 }
 let sources =
-    TISCreateInputSourceList([kTISPropertyInputSourceID as String: id] as CFDictionary, false)
+    TISCreateInputSourceList(
+        [
+            kTISPropertyInputSourceID as String: id, kTISPropertyInputSourceIsEnabled as String: true,
+        ] as CFDictionary, false
+    )
     .takeRetainedValue() as! [TISInputSource]
 guard let source = sources.first else { exit(3) }
+if timing == "settle-before" { Thread.sleep(forTimeInterval: 0.6) }
 guard probeIsFrontmost(), disposableFieldHasFocus() else { exit(2) }
+let begin = Date().timeIntervalSince1970 * 1000
 let result = TISSelectInputSource(source)
-print("Selected \(id): OSStatus \(result)")
+let end = Date().timeIntervalSince1970 * 1000
+if timing == "hold-after" { Thread.sleep(forTimeInterval: 0.6) }
+if timing == "pump-after" { RunLoop.main.run(until: Date().addingTimeInterval(0.6)) }
+guard probeIsFrontmost(), disposableFieldHasFocus() else { exit(2) }
+let data = try JSONSerialization.data(withJSONObject: [
+    "source": id, "status": result, "timing": timing, "selectBegin": begin, "selectEnd": end,
+    "readyTime": Date().timeIntervalSince1970 * 1000, "pid": ProcessInfo.processInfo.processIdentifier,
+])
+print(String(decoding: data, as: UTF8.self))
+fflush(stdout)
+if timing == "stay-alive", result == noErr {
+    // The driver keeps this process alive through key delivery, then terminates
+    // it. A bounded lifetime and focus checks also cover a lost parent.
+    let limit = Date().addingTimeInterval(15)
+    while Date() < limit, probeIsFrontmost(), disposableFieldHasFocus() {
+        RunLoop.main.run(until: Date().addingTimeInterval(0.02))
+    }
+}
 exit(result == noErr ? 0 : 4)
