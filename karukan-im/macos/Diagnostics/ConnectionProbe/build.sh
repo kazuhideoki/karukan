@@ -9,6 +9,12 @@ app="$output_dir/Karukan Connection Probe.app"
 if pgrep -f "$app/Contents/MacOS/KarukanConnectionProbe" >/dev/null; then
     echo 'Close the connection probe before replacing its signed bundle.' >&2
     exit 2
+else
+    status=$?
+    if [ "$status" -ne 1 ]; then
+        echo 'Could not check whether the probe is running; bundle not replaced.' >&2
+        exit "$status"
+    fi
 fi
 mkdir -p "$app/Contents/MacOS"
 xcrun clang -fobjc-arc -fmodules -fmodules-cache-path="$output_dir/module-cache" \

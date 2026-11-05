@@ -1,5 +1,5 @@
-import Cocoa
 import Carbon
+import Cocoa
 
 // Only this app's disposable fields are observed. No event tap or global key
 // monitor is installed. No input-context getters are used by the trace sink.
@@ -29,6 +29,8 @@ func eventMetadata(_ event: NSEvent) -> [String: Any] {
         "modifiers": event.modifierFlags.rawValue,
         "eventUserData": event.cgEvent?.getIntegerValueField(.eventSourceUserData) ?? 0,
         "eventSourcePID": event.cgEvent?.getIntegerValueField(.eventSourceUnixProcessID) ?? 0,
+        "eventTargetPID": event.cgEvent?.getIntegerValueField(.eventTargetUnixProcessID) ?? 0,
+        "eventSourceState": event.cgEvent?.getIntegerValueField(.eventSourceStateID) ?? 0,
         "cgEventType": event.cgEvent?.type.rawValue ?? 0,
     ]
     if event.type == .keyDown || event.type == .keyUp || event.type == .flagsChanged {
@@ -75,7 +77,10 @@ func record(_ event: String, extra: [String: Any] = [:]) {
 final class ProbeApplication: NSApplication {
     override func sendEvent(_ event: NSEvent) {
         let keyboard = [.keyDown, .keyUp, .flagsChanged].contains(event.type)
-        guard keyboard else { super.sendEvent(event); return }
+        guard keyboard else {
+            super.sendEvent(event)
+            return
+        }
         dispatchSequence += 1
         dispatchStack.append(dispatchSequence)
         record("sendEventBegin", extra: eventMetadata(event))
@@ -125,11 +130,15 @@ final class ProbeDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         root.edgeInsets = NSEdgeInsets(top: 18, left: 18, bottom: 18, right: 18)
         root.translatesAutoresizingMaskIntoConstraints = false
         for controls: [(String, Selector)] in [
-            [("Reset test field", #selector(reset)), ("ABC", #selector(abc)),
-                ("Karukan", #selector(karukan)), ("Reconnect text context", #selector(reconnect))],
-            [("Overlay: keep source", #selector(overlayKeep)),
+            [
+                ("Reset test field", #selector(reset)), ("ABC", #selector(abc)),
+                ("Karukan", #selector(karukan)), ("Reconnect text context", #selector(reconnect)),
+            ],
+            [
+                ("Overlay: keep source", #selector(overlayKeep)),
                 ("Overlay: restore before focus", #selector(overlayBefore)),
-                ("Overlay: restore after focus", #selector(overlayAfter))],
+                ("Overlay: restore after focus", #selector(overlayAfter)),
+            ],
             [("Run 20 comparisons (about 45 seconds)", #selector(runComparison))],
         ] {
             let buttons = NSStackView()
@@ -138,8 +147,10 @@ final class ProbeDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             }
             root.addArrangedSubview(buttons)
         }
-        root.addArrangedSubview(NSTextField(labelWithString:
-            "Only disposable test text. Logs contain event metadata and document lengths, never text."))
+        root.addArrangedSubview(
+            NSTextField(
+                labelWithString:
+                    "Only disposable test text. Logs contain event metadata and document lengths, never text."))
         let scroll = NSScrollView()
         scroll.hasVerticalScroller = true
         scroll.borderType = .bezelBorder
@@ -163,7 +174,8 @@ final class ProbeDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let menu = NSMenu()
         let appItem = NSMenuItem()
         let appMenu = NSMenu()
-        appMenu.addItem(withTitle: "Quit Connection Probe", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        appMenu.addItem(
+            withTitle: "Quit Connection Probe", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         appItem.submenu = appMenu
         menu.addItem(appItem)
         let editItem = NSMenuItem()
@@ -247,10 +259,16 @@ final class ProbeDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         // A bounded local reproduction; no other application receives keys.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
             guard let self else { return }
-            guard NSApp.isActive else { self.abortComparison(); return }
+            guard NSApp.isActive else {
+                self.abortComparison()
+                return
+            }
             if order == "before" { self.selectSource("dev.togatoga.inputmethod.Karukan.Japanese") }
             DispatchQueue.main.asyncAfter(deadline: .now() + (order == "before" ? 0.05 : 0)) {
-                guard NSApp.isActive else { self.abortComparison(); return }
+                guard NSApp.isActive else {
+                    self.abortComparison()
+                    return
+                }
                 panel.orderOut(nil)
                 self.window.makeKeyAndOrderFront(nil)
                 self.window.makeFirstResponder(self.textView)
@@ -264,10 +282,12 @@ final class ProbeDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     @objc func runComparison() {
         guard automatedCases.isEmpty, NSApp.isActive, window.isKeyWindow else { return }
-        automatedCases = ["baseline", "keep", "before", "after", "rapid",
+        automatedCases = [
+            "baseline", "keep", "before", "after", "rapid",
             "baseline", "rapid", "after", "before", "keep",
             "baseline", "keep", "before", "after", "rapid",
-            "baseline", "rapid", "after", "before", "keep"]
+            "baseline", "rapid", "after", "before", "keep",
+        ]
         automatedIndex = 0
         comparisonGeneration += 1
         record("comparisonBegin")
@@ -276,7 +296,10 @@ final class ProbeDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     func nextAutomatedTrial() {
         guard !automatedCases.isEmpty else { return }
-        guard NSApp.isActive, window.isKeyWindow else { abortComparison(); return }
+        guard NSApp.isActive, window.isKeyWindow else {
+            abortComparison()
+            return
+        }
         guard automatedIndex < automatedCases.count else {
             automatedCases = []
             record("comparisonCompleted")
@@ -292,13 +315,20 @@ final class ProbeDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         selectSource("com.apple.keylayout.ABC")
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { [weak self] in
             guard let self, self.comparisonGeneration == generation else { return }
-            guard NSApp.isActive, self.window.isKeyWindow else { self.abortComparison(); return }
+            guard NSApp.isActive, self.window.isKeyWindow else {
+                self.abortComparison()
+                return
+            }
             self.selectSource("dev.togatoga.inputmethod.Karukan.Japanese")
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
                 guard self.comparisonGeneration == generation else { return }
-                guard NSApp.isActive, self.window.isKeyWindow else { self.abortComparison(); return }
-                if mode == "baseline" { self.readyForTrial(mode) }
-                else if mode == "rapid" {
+                guard NSApp.isActive, self.window.isKeyWindow else {
+                    self.abortComparison()
+                    return
+                }
+                if mode == "baseline" {
+                    self.readyForTrial(mode)
+                } else if mode == "rapid" {
                     self.selectSource("com.apple.keylayout.ABC")
                     self.selectSource("dev.togatoga.inputmethod.Karukan.Japanese")
                     self.readyForTrial(mode)
@@ -312,7 +342,8 @@ final class ProbeDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     func readyForTrial(_ condition: String) {
         guard !automatedCases.isEmpty else { return }
         guard NSApp.isActive, window.isKeyWindow, window.firstResponder === textView else {
-            abortComparison(); return
+            abortComparison()
+            return
         }
         awaitingReturn = true
         record("trialReady", extra: ["condition": condition, "caseIndex": automatedIndex])
