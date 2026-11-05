@@ -63,7 +63,8 @@ func inputDiagnosticEventDetails(_ event: NSEvent) -> InputDiagnosticDetails {
     case .flagsChanged: kind = .flagsChanged
     default: kind = .other
     }
-    return InputDiagnosticDetails(
+    var details = InputDiagnosticDetails(
+        eventTimestamp: event.timestamp,
         eventKind: kind,
         eventModifiers: UInt64(event.modifierFlags.intersection(.deviceIndependentFlagsMask).rawValue),
         sessionModifiers: InputDiagnosticEnvironmentMonitor.sessionModifiers,
@@ -71,4 +72,14 @@ func inputDiagnosticEventDetails(_ event: NSEvent) -> InputDiagnosticDetails {
         hasCharactersIgnoringModifiers: event.type == .keyDown
             ? !(event.charactersIgnoringModifiers ?? "").isEmpty : nil
     )
+    // Only correlate explicitly tagged events from the disposable test app.
+    // User event payloads, characters and key codes are never persisted here.
+    details.testEventID = event.cgEvent.flatMap {
+        inputDiagnosticProbeEventID($0.getIntegerValueField(.eventSourceUserData))
+    }
+    return details
+}
+
+func inputDiagnosticProbeEventID(_ raw: Int64) -> Int64? {
+    UInt64(bitPattern: raw) >> 32 == 0x4b41_5255 ? raw : nil
 }
