@@ -24,21 +24,41 @@ class KarukanInputController: IMKInputController {
     private var diagnosticActive = false
     private var diagnosticClientBundle: String?
     private var lastMarkedRangeProbe: TimeInterval = -.infinity
+    private var diagnosticCallDepth = 0
 
     // MARK: - Event handling
 
     override func recognizedEvents(_ sender: Any!) -> Int {
         // flagsChanged is needed for the right-⌘ tap detection; plain
         // keyDown events never carry lone-modifier transitions.
-        Int(NSEvent.EventTypeMask([.keyDown, .flagsChanged]).rawValue)
+        let mask = NSEvent.EventTypeMask([.keyDown, .flagsChanged]).rawValue
+        diagnose(
+            .recognizedEventsRequested, client: sender as? (any IMKTextInput),
+            details: InputDiagnosticDetails(recognizedEventMask: UInt64(mask)), inspectAppState: false)
+        return Int(mask)
     }
 
     override func handle(_ event: NSEvent!, client sender: Any!) -> Bool {
-        guard let event else { return false }
+        guard InputDiagnostics.shared.isEnabled else { return handleInput(event, client: sender) }
+        diagnosticSequence &+= 1
+        diagnosticCallDepth += 1
+        defer { diagnosticCallDepth -= 1 }
+        diagnose(.handleBegin, client: sender as? (any IMKTextInput), inspectAppState: false)
+        let consumed = handleInput(event, client: sender)
+        diagnose(
+            .handleEnd, client: sender as? (any IMKTextInput),
+            details: InputDiagnosticDetails(consumed: consumed), inspectAppState: false)
+        return consumed
+    }
+
+    private func handleInput(_ event: NSEvent?, client sender: Any?) -> Bool {
+        guard let event else {
+            diagnose(.missingEvent, client: sender as? (any IMKTextInput), inspectAppState: false)
+            return false
+        }
 
         // 除外判定より先に記録する。⌘付きイベントが届いた場合と未到達を区別する。
         if InputDiagnostics.shared.isEnabled {
-            diagnosticSequence &+= 1
             InputDiagnosticEnvironmentMonitor.shared.received(event.type)
             diagnose(
                 .eventReceived, client: sender as? (any IMKTextInput),
@@ -146,6 +166,7 @@ class KarukanInputController: IMKInputController {
     // MARK: - Lifecycle
 
     override func activateServer(_ sender: Any!) {
+        diagnose(.activationBegin, client: sender as? (any IMKTextInput), inspectAppState: false)
         diagnosticActive = true
         diagnosticClientBundle = nil
         lastMarkedRangeProbe = -.infinity
@@ -157,6 +178,18 @@ class KarukanInputController: IMKInputController {
         diagnose(.activate, client: sender as? (any IMKTextInput))
         engineClient.reloadUserDictionaryIfChangedAsync()
         super.activateServer(sender)
+        diagnose(.activationCompleted, client: sender as? (any IMKTextInput), inspectAppState: false)
+    }
+
+    override func setValue(_ value: Any!, forTag tag: Int, client sender: Any!) {
+        let japaneseSource = (Bundle.main.bundleIdentifier ?? "dev.togatoga.inputmethod.Karukan") + ".Japanese"
+        let details = InputDiagnosticDetails(
+            modeTag: tag, inputModeMatchesJapanese: (value as? String) == japaneseSource)
+        diagnose(
+            .modeChangeBegin, client: sender as? (any IMKTextInput), details: details, inspectAppState: false)
+        super.setValue(value, forTag: tag, client: sender)
+        diagnose(
+            .modeChangeEnd, client: sender as? (any IMKTextInput), details: details, inspectAppState: false)
     }
 
     override func deactivateServer(_ sender: Any!) {
@@ -390,16 +423,20 @@ class KarukanInputController: IMKInputController {
 
     private func diagnose(
         _ event: InputDiagnosticEvent, client: (any IMKTextInput)? = nil,
-        details: InputDiagnosticDetails = InputDiagnosticDetails()
+        details: InputDiagnosticDetails = InputDiagnosticDetails(), inspectAppState: Bool = true
     ) {
         guard InputDiagnostics.shared.isEnabled else { return }
-        let frontmost = NSWorkspace.shared.frontmostApplication
+        // Early lifecycle callbacks must not initialize the candidate panel or
+        // issue extra client/workspace queries merely to produce a log entry.
+        let frontmost = inspectAppState ? NSWorkspace.shared.frontmostApplication : nil
         let context = InputDiagnosticContext(
             session: diagnosticSession, sequence: diagnosticSequence, active: diagnosticActive,
             client: client.map { String(describing: ObjectIdentifier($0 as AnyObject)) },
             clientBundle: diagnosticClientBundle,
             frontmostBundle: frontmost?.bundleIdentifier, frontmostPID: frontmost?.processIdentifier,
-            hasPreedit: hasPreedit, candidatesVisible: Self.candidateWindow.isVisible
+            hasPreedit: hasPreedit,
+            candidatesVisible: inspectAppState ? Self.candidateWindow.isVisible : nil,
+            callDepth: diagnosticCallDepth
         )
         InputDiagnostics.shared.record(event, context: context, details: details)
     }

@@ -7,6 +7,8 @@ enum InputDiagnosticEvent: String, Codable {
     case clientCallBegin, clientCallEnd
     case eventReceived, eventBypassed, environmentSnapshot
     case redundantPreeditClearSkipped
+    case handleBegin, handleEnd, missingEvent, recognizedEventsRequested
+    case activationBegin, activationCompleted, modeChangeBegin, modeChangeEnd
 }
 
 enum InputDiagnosticEventKind: String, Codable {
@@ -44,10 +46,16 @@ struct InputDiagnosticContext: Codable {
     var frontmostBundle: String?
     var frontmostPID: Int32?
     var hasPreedit: Bool
-    var candidatesVisible: Bool
+    var candidatesVisible: Bool?
+    var callDepth: Int? = nil
 }
 
 struct InputDiagnosticDetails: Codable {
+    var eventTimestamp: TimeInterval?
+    var testEventID: Int64?
+    var recognizedEventMask: UInt64?
+    var modeTag: Int?
+    var inputModeMatchesJapanese: Bool?
     var call: InputDiagnosticCall?
     var elapsedMs: Double?
     var textUTF16Length: Int?
@@ -102,10 +110,11 @@ struct InputDiagnosticAction: Codable {
 }
 
 struct InputDiagnosticEntry: Codable {
-    var schema = 2
+    var schema = 3
     var timestamp = Date()
     var uptime = ProcessInfo.processInfo.systemUptime
     var pid = ProcessInfo.processInfo.processIdentifier
+    var isMainThread = Thread.isMainThread
     var run: String
     var build: String?
     var event: InputDiagnosticEvent

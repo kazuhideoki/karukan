@@ -47,5 +47,13 @@
             #expect(details.hasCharacters == nil)
             #expect(details.hasCharactersIgnoringModifiers == nil)
         }
+
+        @Test func onlyDisposableProbeTagsAreRecorded() {
+            #expect(inputDiagnosticProbeEventID(0) == nil)
+            #expect(inputDiagnosticProbeEventID(12345) == nil)
+            #expect(inputDiagnosticProbeEventID(-1) == nil)
+            let testID: Int64 = 0x4b41_5255_0000_002a
+            #expect(inputDiagnosticProbeEventID(testID) == testID)
+        }
     }
 #endif
