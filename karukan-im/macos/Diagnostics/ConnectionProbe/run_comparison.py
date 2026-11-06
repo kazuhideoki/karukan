@@ -192,5 +192,6 @@ if __name__ == "__main__":
     delivery_cycle = args.delivery_cycle.split(",")
     if not delivery_cycle or any(mode not in ["hid", "session", "annotated", "pid"] for mode in delivery_cycle):
         raise SystemExit("Delivery cycle must use hid, session, annotated, or pid")
-    raise SystemExit(run(root, delivery_cycle, run_timeout=300 if args.manual_keys_only else 180,
+    raise SystemExit(run(root, delivery_cycle, arm_timeout=600 if args.manual_keys_only else 20,
+        run_timeout=300 if args.manual_keys_only else 180,
         require_manual=args.manual_keys_only))
