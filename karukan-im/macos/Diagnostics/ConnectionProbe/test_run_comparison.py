@@ -113,6 +113,54 @@ class ComparisonArtifactTests(unittest.TestCase):
             self.assertTrue(child.stdout.closed)
             self.assertEqual(json.loads((root / "comparison-results.json").read_text())["status"], "driverError")
 
+    def test_manual_comparison_selects_source_but_never_calls_key_driver(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            log = root / "client-events.jsonl"
+            log.write_text("")
+
+            def provide_phases(_delay):
+                with log.open("a") as file:
+                    for event in ["comparisonBegin", "trialPrimeReady", "trialSourceSelectionRequested",
+                                  "trialReady", "trialResult", "comparisonCompleted"]:
+                        file.write(json.dumps({"timestamp": run_comparison.time.time() * 1000,
+                            "event": event, "run": "manual-run", "trial": 1, "caseIndex": 0,
+                            "condition": "primed", "manualKeys": True, "length": 1,
+                            "matchesKa": True, "hasMarkedText": False}) + "\n")
+
+            with mock.patch.object(run_comparison.time, "sleep", side_effect=provide_phases), \
+                mock.patch.object(run_comparison.subprocess, "run", return_value=mock.Mock(stdout='{"status":0}')) as send, \
+                mock.patch.object(run_comparison.subprocess, "Popen") as spawn, \
+                contextlib.redirect_stdout(io.StringIO()):
+                code = run_comparison.run(root, ["pid"], arm_timeout=1, require_manual=True)
+            self.assertEqual(code, 0)
+            self.assertEqual(send.call_count, 1)
+            self.assertEqual(send.call_args.args[0], [str(root / "SelectProbeSource"), "Karukan", "immediate"])
+            spawn.assert_not_called()
+            result = json.loads((root / "comparison-results.json").read_text())
+            self.assertTrue(result["manualKeys"])
+            self.assertEqual(result["results"][0]["delivery"], "physical")
+
+    def test_manual_only_driver_rejects_automatic_suite_without_mutations(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            log = root / "client-events.jsonl"
+            log.write_text("")
+
+            def provide_begin(_delay):
+                with log.open("a") as file:
+                    file.write(json.dumps({"timestamp": run_comparison.time.time() * 1000,
+                        "event": "comparisonBegin", "run": "automatic-run", "manualKeys": False}) + "\n")
+
+            with mock.patch.object(run_comparison.time, "sleep", side_effect=provide_begin), \
+                mock.patch.object(run_comparison.subprocess, "run") as send, \
+                mock.patch.object(run_comparison.subprocess, "Popen") as spawn, \
+                contextlib.redirect_stdout(io.StringIO()):
+                code = run_comparison.run(root, ["pid"], arm_timeout=1, require_manual=True)
+            self.assertEqual(code, 2)
+            send.assert_not_called()
+            spawn.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()
