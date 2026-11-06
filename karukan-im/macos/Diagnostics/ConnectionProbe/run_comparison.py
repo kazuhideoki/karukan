@@ -5,11 +5,11 @@ Requires explicit user authorization. Never activates an app or starts a trial.
 The primed-source condition selects Karukan using a separate guarded process,
 only when the foreground test field has requested that phase.
 """
+import argparse
 import json
 import pathlib
 import select
 import subprocess
-import sys
 import time
 
 SOURCE_TIMINGS = {
@@ -26,7 +26,7 @@ SOURCE_TIMINGS = {
 RECOVERY_PHASES = ["unchanged", "after-context-snapshot", "after-context-reconnect"]
 
 
-def run(root, delivery_cycle, arm_timeout=20, run_timeout=180):
+def run(root, delivery_cycle, arm_timeout=20, run_timeout=180, require_manual=False):
     log = root / "client-events.jsonl"
     driver = root / "PhysicalKeyProbe"
     deliveries, handled, results = {}, set(), []
@@ -36,6 +36,7 @@ def run(root, delivery_cycle, arm_timeout=20, run_timeout=180):
     status, error, active_run = "waitingForStart", None, None
     output_path = root / "comparison-results.json"
     live_selector = None
+    manual_keys = False
 
     def stop_selector():
         nonlocal live_selector
@@ -54,15 +55,19 @@ def run(root, delivery_cycle, arm_timeout=20, run_timeout=180):
     def save():
         output_path.write_text(json.dumps({"status": status, "start": start,
             "results": results, "sourceResults": source_results,
-            "recoveries": recoveries, "error": error}, indent=2) + "\n")
+            "recoveries": recoveries, "error": error, "manualKeys": manual_keys,
+            "requireManual": require_manual}, indent=2) + "\n")
 
     def post(row, phase, keys):
         identity = (row["run"], row["trial"], phase)
         if identity in handled:
             raise RuntimeError("Duplicate trial phase; refusing further input")
         handled.add(identity)
-        delivery = delivery_cycle[row["caseIndex"] % len(delivery_cycle)]
+        delivery = "physical" if manual_keys else delivery_cycle[row["caseIndex"] % len(delivery_cycle)]
         deliveries[row["trial"]] = delivery
+        if manual_keys:
+            print(json.dumps({"event": "waitingForPhysicalKeys", "trial": row["trial"], "phase": phase}), flush=True)
+            return
         for key in keys:
             if live_selector is not None and live_selector.poll() is not None:
                 raise RuntimeError("Persistent selector stopped before input; refusing further keys")
@@ -90,6 +95,9 @@ def run(root, delivery_cycle, arm_timeout=20, run_timeout=180):
                 if row["event"] == "comparisonBegin":
                     if status != "waitingForStart":
                         raise RuntimeError("A second comparison started; refusing further input")
+                    manual_keys = row.get("manualKeys") is True
+                    if require_manual and not manual_keys:
+                        raise RuntimeError("Manual-only driver rejected an automatic comparison")
                     status = "running"
                     active_run = row["run"]
                     deadline = time.monotonic() + run_timeout
@@ -175,8 +183,14 @@ def run(root, delivery_cycle, arm_timeout=20, run_timeout=180):
 
 
 if __name__ == "__main__":
-    root = pathlib.Path(sys.argv[1]).resolve()
-    delivery_cycle = sys.argv[2].split(",") if len(sys.argv) > 2 else ["pid"]
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("root", type=pathlib.Path)
+    parser.add_argument("delivery_cycle", nargs="?", default="pid")
+    parser.add_argument("--manual-keys-only", action="store_true", help="Never synthesize keys; accept only a manual comparison")
+    args = parser.parse_args()
+    root = args.root.resolve()
+    delivery_cycle = args.delivery_cycle.split(",")
     if not delivery_cycle or any(mode not in ["hid", "session", "annotated", "pid"] for mode in delivery_cycle):
         raise SystemExit("Delivery cycle must use hid, session, annotated, or pid")
-    raise SystemExit(run(root, delivery_cycle))
+    raise SystemExit(run(root, delivery_cycle, run_timeout=300 if args.manual_keys_only else 180,
+        require_manual=args.manual_keys_only))

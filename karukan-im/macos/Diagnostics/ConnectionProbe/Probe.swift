@@ -48,6 +48,7 @@ func record(_ event: String, extra: [String: Any] = [:]) {
         "uptime": ProcessInfo.processInfo.systemUptime, "event": event,
         "run": runID, "trial": trial, "pid": ProcessInfo.processInfo.processIdentifier,
         "appActive": NSApp.isActive, "contextTracing": traceEnabled,
+        "manualKeys": probeDelegate?.manualComparison ?? false,
         "dispatchStack": dispatchStack, "isMainThread": Thread.isMainThread,
         "keyWindow": primaryWindow?.isKeyWindow ?? false,
     ]
@@ -121,6 +122,7 @@ final class ProbeDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     var comparisonGeneration = 0
     var startRequested = false
     var compareRecovery = false
+    var manualComparison = false
     var recoveryPhase: Int?
     var recoveryStartLength = 0
     var recoveryStartMarkedWrites = 0
@@ -130,7 +132,7 @@ final class ProbeDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         observedView = textView
         window = NSWindow(
-            contentRect: NSRect(x: 100, y: 160, width: 1120, height: 460),
+            contentRect: NSRect(x: 100, y: 160, width: 1120, height: 640),
             styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
         primaryWindow = window
         window.title = "Karukan Connection Probe — disposable text only"
@@ -157,6 +159,7 @@ final class ProbeDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             ],
             [("Run 36 source-order comparisons", #selector(runSourceComparison))],
             [("Run 24 Karukan / Apple comparisons", #selector(runIMEComparison))],
+            [("手入力で確認（Karukan / Apple）", #selector(runManualComparison))],
         ] {
             let buttons = NSStackView()
             for (label, action) in controls {
@@ -178,6 +181,7 @@ final class ProbeDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         scroll.documentView = textView
         scroll.translatesAutoresizingMaskIntoConstraints = false
         root.addArrangedSubview(scroll)
+        statusLabel.font = NSFont.systemFont(ofSize: 16, weight: .semibold)
         root.addArrangedSubview(statusLabel)
         window.contentView!.addSubview(root)
         NSLayoutConstraint.activate([
@@ -326,6 +330,10 @@ final class ProbeDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             ).flatMap { $0 }, withRecovery: true)
     }
 
+    @objc func runManualComparison() {
+        requestComparison(["primed", "apple-primed", "primed", "apple-primed"], withRecovery: true, manualKeys: true)
+    }
+
     @objc func runSourceComparison() {
         let conditions = [
             "primed", "primed-post-delay", "primed-selector-hold",
@@ -340,7 +348,9 @@ final class ProbeDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     @objc func preflight() { requestComparison([], preflightOnly: true) }
 
-    func requestComparison(_ cases: [String], preflightOnly: Bool = false, withRecovery: Bool = false) {
+    func requestComparison(
+        _ cases: [String], preflightOnly: Bool = false, withRecovery: Bool = false, manualKeys: Bool = false
+    ) {
         guard automatedCases.isEmpty, !startRequested else { return }
         startRequested = true
         record("comparisonRequested", extra: ["preflightOnly": preflightOnly])
@@ -363,6 +373,7 @@ final class ProbeDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 statusLabel.stringValue = "Preflight ready — no keys sent and no source selected"
             } else {
                 self.compareRecovery = withRecovery
+                self.manualComparison = manualKeys
                 self.startComparison(cases)
             }
         }
@@ -391,7 +402,10 @@ final class ProbeDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             }
             automatedCases = []
             record("comparisonCompleted")
-            statusLabel.stringValue = "Comparisons completed — keyboard and mouse are free"
+            statusLabel.stringValue =
+                manualComparison
+                ? "手入力試験が完了しました。Karukanへ戻しました。通常の作業へ戻れます。"
+                : "Comparisons completed — keyboard and mouse are free"
             return
         }
         reset()
@@ -409,6 +423,10 @@ final class ProbeDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             }
             if mode.hasPrefix("primed") || mode.hasPrefix("apple-primed") {
                 self.awaitingPrime = true
+                if self.manualComparison {
+                    statusLabel.stringValue =
+                        "手入力 \(self.automatedIndex + 1)/\(self.automatedCases.count)：a を1文字だけ押してください（Enter不要）"
+                }
                 record("trialPrimeReady", extra: ["condition": mode, "caseIndex": self.automatedIndex])
                 self.setTrialTimeout()
                 return
@@ -441,7 +459,10 @@ final class ProbeDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
         awaitingReturn = true
         record("trialReady", extra: ["condition": condition, "caseIndex": automatedIndex])
-        statusLabel.stringValue = "Comparison \(automatedIndex + 1)/\(automatedCases.count) — \(condition)"
+        statusLabel.stringValue =
+            manualComparison
+            ? "手入力 \(automatedIndex + 1)/\(automatedCases.count)：k → a → Enter を1回ずつ押してください"
+            : "Comparison \(automatedIndex + 1)/\(automatedCases.count) — \(condition)"
         setTrialTimeout()
     }
 
@@ -449,7 +470,7 @@ final class ProbeDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         trialTimeout?.cancel()
         let timeout = DispatchWorkItem { [weak self] in self?.abortComparison() }
         trialTimeout = timeout
-        DispatchQueue.main.asyncAfter(deadline: .now() + 4, execute: timeout)
+        DispatchQueue.main.asyncAfter(deadline: .now() + (manualComparison ? 30 : 4), execute: timeout)
     }
 
     func finishPrimeAfterLetter() {
@@ -464,6 +485,7 @@ final class ProbeDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
         textView.string = ""
         awaitingSource = true
+        if manualComparison { statusLabel.stringValue = "切替中です。次の案内が出るまでお待ちください。" }
         let condition = automatedCases[automatedIndex]
         record("trialSourceSelectionRequested", extra: ["condition": condition, "caseIndex": automatedIndex])
         if condition == "primed-in-process" {
@@ -476,6 +498,7 @@ final class ProbeDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         guard awaitingReturn, automatedCases.indices.contains(automatedIndex) else { return }
         awaitingReturn = false
         trialTimeout?.cancel()
+        if manualComparison { statusLabel.stringValue = "確認中です。次の案内が出るまでお待ちください。" }
         if recoveryPhase != nil {
             finishRecoveryAfterReturn()
             return
@@ -536,6 +559,10 @@ final class ProbeDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         recoveryStartLength = textView.string.utf16.count
         recoveryStartMarkedWrites = markedWriteCount
         awaitingReturn = true
+        if manualComparison {
+            let names = ["無変更で再試行", "状態の確認後", "接続の再開後"]
+            statusLabel.stringValue = "\(names[phase])：k → a → Enter を1回ずつ押してください"
+        }
         record("recoveryReady", extra: ["phase": recoveryNames[phase], "caseIndex": automatedIndex])
         setTrialTimeout()
     }
