@@ -119,20 +119,27 @@ class EngineClient {
             var buffer = Data()
 
             while true {
-                let chunk = handle.availableData
-                if chunk.isEmpty {
-                    // EOF: server terminated
-                    self?.failAllPending()
-                    break
-                }
-                buffer.append(chunk)
+                // This dispatch work item lives until the server exits. Drain
+                // Foundation's temporary data/JSON objects after each read,
+                // rather than retaining them for the entire IME session.
+                let hasData = autoreleasepool {
+                    let chunk = handle.availableData
+                    if chunk.isEmpty {
+                        // EOF: server terminated
+                        self?.failAllPending()
+                        return false
+                    }
+                    buffer.append(chunk)
 
-                while let newlineRange = buffer.range(of: Data([0x0A])) {
-                    let lineData = buffer.subdata(in: buffer.startIndex..<newlineRange.lowerBound)
-                    buffer.removeSubrange(buffer.startIndex...newlineRange.lowerBound)
-                    guard !lineData.isEmpty else { continue }
-                    self?.handleResponse(lineData)
+                    while let newlineRange = buffer.range(of: Data([0x0A])) {
+                        let lineData = buffer.subdata(in: buffer.startIndex..<newlineRange.lowerBound)
+                        buffer.removeSubrange(buffer.startIndex...newlineRange.lowerBound)
+                        guard !lineData.isEmpty else { continue }
+                        self?.handleResponse(lineData)
+                    }
+                    return true
                 }
+                if !hasData { break }
             }
         }
     }

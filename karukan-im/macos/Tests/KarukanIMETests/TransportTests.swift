@@ -1,3 +1,4 @@
+import Darwin
 import XCTest
 
 @testable import KarukanIME
@@ -72,6 +73,42 @@ final class TransportTests: XCTestCase {
             let data = client.sendRequestSync(method: "status", params: [:], timeout: 5.0)
             XCTAssertNotNil(data)
         }
+    }
+
+    func testReaderMemoryStaysBoundedAcrossManyResponses() throws {
+        // Keep one reader connection alive: its temporary Foundation objects
+        // must be released before that connection reaches EOF.
+        for _ in 0..<100 {
+            autoreleasepool {
+                XCTAssertNotNil(client.sendRequestSync(method: "status", params: [:], timeout: 5.0))
+            }
+        }
+        let before = try physicalFootprintBytes()
+        for _ in 0..<10_000 {
+            // Do not count temporary objects retained by the test thread.
+            autoreleasepool {
+                XCTAssertNotNil(client.sendRequestSync(method: "status", params: [:], timeout: 5.0))
+            }
+        }
+        let after = try physicalFootprintBytes()
+        XCTAssertLessThanOrEqual(
+            after, before + 16 * 1024 * 1024,
+            "Response processing retained more than 16 MiB while the reader was still running")
+    }
+
+    private func physicalFootprintBytes() throws -> UInt64 {
+        var info = task_vm_info_data_t()
+        var count = mach_msg_type_number_t(
+            MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<integer_t>.size)
+        let result = withUnsafeMutablePointer(to: &info) {
+            $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
+                task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), $0, &count)
+            }
+        }
+        guard result == KERN_SUCCESS else {
+            throw XCTSkip("Cannot read the test process memory footprint: \(result)")
+        }
+        return info.phys_footprint
     }
 
     func testServerStopAndRestartRecovers() throws {
